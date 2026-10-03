@@ -245,8 +245,15 @@ def split_guide_ref(ref: str) -> tuple[int, str]:
 
 
 def _context(
-    db: Session, job: GenerationJob, guide: StudyGuide, segments: list[dict], llm: LLM, settings: Settings
+    db: Session,
+    job: GenerationJob,
+    guide: StudyGuide,
+    segments: list[dict],
+    llm: LLM,
+    settings: Settings,
+    event_job: GenerationJob | None = None,
 ):
+    """`job` holds the pipeline state; events name `event_job` (the job actually running) if given."""
     meter = TokenMeter.from_dict(settings.guide_token_budget, guide.token_usage)
     state = copy.deepcopy(job.state or {})
 
@@ -264,7 +271,7 @@ def _context(
         db.commit()
 
     def emit(type_: str, data: dict) -> None:
-        add_event(db, guide.id, type_, {**data, "job_id": str(job.id)})
+        add_event(db, guide.id, type_, {**data, "job_id": str((event_job or job).id)})
         db.commit()
 
     return PipelineContext(
@@ -339,7 +346,7 @@ def run_regenerate(db: Session, job: GenerationJob, llm: LLM, settings: Settings
     if guide is None or source_job is None:
         raise PipelineError("guide_not_ready", "This guide is not finished yet.")
     segments, _ = guide_segments(db, guide.id)
-    ctx = _context(db, source_job, guide, segments, llm, settings)
+    ctx = _context(db, source_job, guide, segments, llm, settings, event_job=job)
     content = orchestrator.regenerate_section(ctx, job.params["section_id"], job.params.get("instruction"))
     guide.content = content
     guide.token_usage = ctx.meter.as_dict()

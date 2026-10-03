@@ -2,9 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
-from app.db.models import GenerationJob
+from app.db.models import GenerationJob, GuideEvent
 from app.db.session import get_sessionmaker
 from tests.api.conftest import signup
 from tests.docs import make_docx, make_pdf
@@ -160,6 +160,13 @@ def test_quiz_flashcards_and_regenerate(client, work, llm, sample_text):
     assert client.post(f"/api/v1/guides/{guide_id}/sections/c2/regenerate", json={}).status_code == 429
     work()
     assert llm.calls[calls_before:] == ["write"]
+    # The web app follows a rewrite by its job id, so its events must carry that id.
+    with get_sessionmaker()() as db:
+        ready = db.scalars(
+            select(GuideEvent).where(GuideEvent.type == "section_ready").order_by(GuideEvent.id.desc())
+        ).first()
+    assert ready.data["regenerated"] is True
+    assert ready.data["job_id"] == r.json()["job_id"]
     assert client.get(f"/api/v1/guides/{guide_id}").json()["status"] == "ready"
     assert client.post(f"/api/v1/guides/{guide_id}/sections/c99/regenerate", json={}).status_code == 404
 
