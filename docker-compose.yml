@@ -1,0 +1,75 @@
+# Local development: Postgres, the API and one worker.
+#   cp .env.example .env   # then set ANTHROPIC_API_KEY
+#   docker compose up --build
+# Web app: http://localhost:3000   API docs: http://localhost:8000/docs
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: hsn
+      POSTGRES_PASSWORD: hsn
+      POSTGRES_DB: hsn
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hsn"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: ./backend
+    command: alembic upgrade head
+    env_file:
+      - path: .env
+        required: false
+    environment: &backend-env
+      HSN_DATABASE_URL: postgresql+psycopg://hsn:hsn@postgres:5432/hsn
+      HSN_STORAGE_DIR: /data/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - files:/data/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./backend
+    command: python -m app.worker
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-env
+    volumes:
+      - files:/data/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build: ./frontend
+    environment:
+      # Next proxies /api/v1/* here, so the browser only talks to the web app's origin.
+      API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  files:
