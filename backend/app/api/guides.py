@@ -4,6 +4,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
@@ -13,8 +14,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import current_user, own_guide, own_source
 from app.core.config import get_settings
 from app.core.errors import AppError, not_found
-from app.db.models import GenerationJob, GuideEvent, GuideSource, SourceSegment, StudyGuide, User
+from app.db.models import GenerationJob, GuideEvent, GuideSource, Source, SourceSegment, StudyGuide, User
 from app.db.session import get_db, get_sessionmaker
+from app.export import FORMATS, ExportInfo, filename, render
 from app.pipeline import jobs
 from app.schemas.api import (
     CreateGuideIn,
@@ -258,6 +260,48 @@ def regenerate_section(
     )
     db.commit()
     return {"job_id": job.id}
+
+
+@router.get(
+    "/guides/{guide_id}/export",
+    response_class=Response,
+    responses={200: {"content": {media: {} for media, _ in FORMATS.values()}, "description": "The file"}},
+)
+def export_guide(
+    guide_id: uuid.UUID,
+    format: Literal["pdf", "docx", "md", "html"] = Query(default="pdf"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download the finished guide as PDF, Word, Markdown or a standalone HTML page."""
+    guide = own_guide(db, user, guide_id)
+    if guide.status != "ready" or not guide.content:
+        raise AppError(409, "guide_not_ready", "Wait for the guide to finish before exporting it.")
+    titles = list(
+        db.scalars(
+            select(Source.title)
+            .join(GuideSource, GuideSource.source_id == Source.id)
+            .where(GuideSource.guide_id == guide.id)
+            .order_by(GuideSource.position)
+        )
+    )
+    info = ExportInfo(
+        title=guide.content.get("title") or guide.title,
+        level=guide.level,
+        source_titles=titles,
+    )
+    media_type, ext = FORMATS[format]
+    data = render(guide.content, format, info)
+    name = filename(info.title, ext)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.delete("/guides/{guide_id}", status_code=204)

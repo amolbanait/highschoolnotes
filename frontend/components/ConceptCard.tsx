@@ -19,19 +19,23 @@ export function ConceptCard({
   number,
   prerequisiteTitles,
   actions,
+  printable = false,
 }: {
   concept: Concept;
   number: number;
   prerequisiteTitles: string[];
   actions?: React.ReactNode;
+  /** Everything expanded (all three levels, quick-check answers) for the print view. */
+  printable?: boolean;
 }) {
   const difficulty = DIFFICULTY[concept.difficulty];
+  const quality = concept.quality;
   return (
     <article
       id={concept.id}
-      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8"
+      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 print:break-inside-auto print:rounded-none print:border-0 print:p-0 print:shadow-none"
     >
-      <header className="mb-5">
+      <header className="mb-5 print:break-after-avoid">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-indigo-700">Concept {number}</span>
           <Badge tone={difficulty.tone}>{difficulty.label}</Badge>
@@ -48,12 +52,14 @@ export function ConceptCard({
         )}
       </header>
 
+      {quality?.needs_checking && <CheckThis problems={quality.problems ?? []} />}
+
       <Markdown>{concept.concept}</Markdown>
       <SourceRefs refs={concept.source_refs} className="mt-2" />
 
       {concept.levels && (
         <Section title="Explain it three ways">
-          <LevelTabs levels={concept.levels} />
+          {printable ? <AllLevels levels={concept.levels} /> : <LevelTabs levels={concept.levels} />}
         </Section>
       )}
 
@@ -108,13 +114,13 @@ export function ConceptCard({
         <Section title="Quick check">
           <ul className="space-y-3">
             {concept.quick_check.map((qc, i) => (
-              <QuickCheckItem key={i} q={qc.q} a={qc.a} />
+              <QuickCheckItem key={i} q={qc.q} a={qc.a} open={printable} />
             ))}
           </ul>
         </Section>
       )}
 
-      {actions && (
+      {actions && !printable && (
         <footer className="mt-6 flex flex-wrap gap-2 border-t border-slate-100 pt-4">{actions}</footer>
       )}
     </article>
@@ -160,8 +166,31 @@ function ExampleItem({ example }: { example: Example }) {
   );
 }
 
-function QuickCheckItem({ q, a }: { q: string; a: string }) {
-  const [shown, setShown] = useState(false);
+function CheckThis({ problems }: { problems: string[] }) {
+  return (
+    <div
+      role="note"
+      className="mb-5 rounded-xl border border-orange-300 bg-orange-50 p-4 text-sm text-orange-900"
+    >
+      <p className="font-semibold">⚠ Check this against your source</p>
+      <p className="mt-1">
+        An automatic review couldn&apos;t fully confirm this section against your material, even after
+        rewriting it. Read it alongside your source before you rely on it.
+      </p>
+      {problems.length > 0 && (
+        <ul className="mt-2 list-disc pl-5">
+          {problems.map((p, i) => (
+            <li key={i}>{p}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function QuickCheckItem({ q, a, open = false }: { q: string; a: string; open?: boolean }) {
+  const [revealed, setShown] = useState(false);
+  const shown = open || revealed;
   return (
     <li className="rounded-xl border border-slate-200 p-4">
       <div className="font-medium text-slate-900">
@@ -189,6 +218,21 @@ const LEVEL_TABS = [
   { key: "understand", label: "Understand it" },
   { key: "deeper", label: "Go deeper" },
 ] as const;
+
+function AllLevels({ levels }: { levels: NonNullable<Concept["levels"]> }) {
+  return (
+    <div className="space-y-3">
+      {LEVEL_TABS.map((tab, i) => (
+        <div key={tab.key}>
+          <p className="font-semibold text-slate-900">
+            Level {i + 1}: {tab.label}
+          </p>
+          <Markdown>{levels[tab.key]}</Markdown>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function LevelTabs({ levels }: { levels: NonNullable<Concept["levels"]> }) {
   const [active, setActive] = useState<(typeof LEVEL_TABS)[number]["key"]>("understand");

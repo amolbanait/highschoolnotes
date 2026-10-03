@@ -20,9 +20,10 @@ def run_one(
     meter: TokenMeter,
     settings: Settings,
     instruction: str | None = None,
+    feedback: str | None = None,
 ) -> dict:
     segments = index.context_for(concept["source_refs"]) or index.segments[:24]
-    system, user = prompt.build(concept, outline(concepts), segments, level, instruction)
+    system, user = prompt.build(concept, outline(concepts), segments, level, instruction, feedback)
     output, usage = llm.generate(
         stage="write", system=system, prompt=user, output=ConceptOutput, effort=settings.write_effort
     )

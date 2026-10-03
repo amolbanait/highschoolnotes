@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 
-from app.db.models import GenerationJob, GuideEvent
+from app.db.models import GenerationJob, GuideEvent, QualityReport
 from app.db.session import get_sessionmaker
 from tests.api.conftest import signup
 from tests.docs import make_docx, make_pdf
@@ -159,7 +159,7 @@ def test_quiz_flashcards_and_regenerate(client, work, llm, sample_text):
     assert r.status_code == 202
     assert client.post(f"/api/v1/guides/{guide_id}/sections/c2/regenerate", json={}).status_code == 429
     work()
-    assert llm.calls[calls_before:] == ["write"]
+    assert llm.calls[calls_before:] == ["write", "review"]
     # The web app follows a rewrite by its job id, so its events must carry that id.
     with get_sessionmaker()() as db:
         ready = db.scalars(
@@ -311,3 +311,63 @@ def test_outage_mid_guide_resumes_without_redoing_work(client, work, llm, sample
     assert guide["status"] == "ready"
     new_calls = llm.calls[len(calls_before) :]
     assert "plan" not in new_calls and new_calls.count("write") == 3 - finished
+
+
+def test_quality_review_scores_rewrites_and_flags(client, work, llm, sample_text):
+    signup(client)
+    llm.review_scores = {"Light reactions": [55, 85], "Chlorophyll": [50, 45]}
+    _, guide_id = _make_guide(client, work, sample_text)
+    guide = client.get(f"/api/v1/guides/{guide_id}").json()
+    by_title = {c["title"]: c for c in guide["content"]["concepts"]}
+    assert by_title["Light reactions"]["quality"]["rewritten"] is True
+    assert by_title["Chlorophyll"]["quality"]["needs_checking"] is True
+    assert guide["quality_score"] == round((90 + 85 + 50) / 3)
+
+    with get_sessionmaker()() as db:
+        reports = {r.section_id: r for r in db.scalars(select(QualityReport))}
+        flag = db.scalars(select(GuideEvent).where(GuideEvent.type == "quality_flag")).one()
+    assert {r.action for r in reports.values()} == {"passed", "regenerated", "flagged"}
+    flagged = reports[by_title["Chlorophyll"]["id"]]
+    assert flagged.score == 50 and [a["score"] for a in flagged.checks["attempts"]] == [50, 45]
+    assert flag.data["section_id"] == by_title["Chlorophyll"]["id"]
+
+    # A student's rewrite is reviewed too, and recorded as a new report.
+    llm.review_scores = {"Chlorophyll": [92]}
+    client.post(f"/api/v1/guides/{guide_id}/sections/{flagged.section_id}/regenerate", json={})
+    work()
+    guide = client.get(f"/api/v1/guides/{guide_id}").json()
+    chlorophyll = next(c for c in guide["content"]["concepts"] if c["title"] == "Chlorophyll")
+    assert chlorophyll["quality"]["score"] == 92 and not chlorophyll["quality"]["needs_checking"]
+    assert guide["quality_score"] == round((90 + 85 + 92) / 3)
+    with get_sessionmaker()() as db:
+        rows = list(db.scalars(select(QualityReport).where(QualityReport.section_id == flagged.section_id)))
+    assert sorted(r.action for r in rows) == ["flagged", "passed"]
+
+
+def test_export_downloads(client, work, sample_text):
+    signup(client)
+    source = _paste(client, sample_text)
+    r = client.post("/api/v1/guides", json={"source_ids": [source["id"]]})
+    guide_id = r.json()["guide_id"]
+    assert client.get(f"/api/v1/guides/{guide_id}/export?format=pdf").status_code == 409  # not made yet
+    work()
+
+    for fmt, media, magic in (
+        ("pdf", "application/pdf", b"%PDF"),
+        ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"PK"),
+        ("md", "text/markdown", b"# Photosynthesis"),
+        ("html", "text/html", b"<!doctype html>"),
+    ):
+        r = client.get(f"/api/v1/guides/{guide_id}/export", params={"format": fmt})
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"].startswith(media)
+        assert r.headers["content-disposition"] == f'attachment; filename="photosynthesis.{fmt}"'
+        assert r.headers["cache-control"] == "private, no-store"
+        assert r.content.startswith(magic)
+    assert b"Photosynthesis notes" in client.get(f"/api/v1/guides/{guide_id}/export?format=md").content
+    assert client.get(f"/api/v1/guides/{guide_id}/export?format=exe").status_code == 422
+
+    # Only the owner can export.
+    client.post("/api/v1/auth/logout")
+    signup(client, email="other@example.com")
+    assert client.get(f"/api/v1/guides/{guide_id}/export?format=md").status_code == 404

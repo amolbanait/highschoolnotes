@@ -111,6 +111,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/guides/{guide_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Guide
+         * @description Download the finished guide as PDF, Word, Markdown or a standalone HTML page.
+         */
+        get: operations["export_guide_api_v1_guides__guide_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/guides/{guide_id}/flashcard-reviews": {
         parameters: {
             query?: never;
@@ -823,6 +843,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_guide_api_v1_guides__guide_id__export_get: {
+        parameters: {
+            query?: {
+                format?: "pdf" | "docx" | "md" | "html";
+            };
+            header?: never;
+            path: {
+                guide_id: string;
+            };
+            cookie?: {
+                hsn_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": unknown;
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": unknown;
+                    "text/html; charset=utf-8": unknown;
+                    "text/markdown; charset=utf-8": unknown;
                 };
             };
             /** @description Validation Error */

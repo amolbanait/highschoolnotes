@@ -9,6 +9,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from app.diagrams import mermaid
+
 _TRANSLATE = str.maketrans(
     {
         "‘": "'", "’": "'", "‛": "'", "′": "'",
@@ -86,20 +88,6 @@ class SourceIndex:
         return [self.segments[i] for i in ordered]
 
 
-_MERMAID_START = re.compile(r"^\s*(flowchart|graph|timeline|mindmap)\b", re.IGNORECASE)
-
-
 def mermaid_problem(source: str) -> str | None:
-    """A cheap structural check. Full parsing happens in the quality stage (thread 4)."""
-    if not source or not source.strip():
-        return "empty diagram"
-    if len(source) > 4000:
-        return "diagram too large"
-    if not _MERMAID_START.match(source):
-        return "unsupported diagram type"
-    for open_, close in ("[]", "()", "{}"):
-        if source.count(open_) != source.count(close):
-            return "unbalanced brackets"
-    if source.count('"') % 2:
-        return "unbalanced quotes"
-    return None
+    """None if the diagram parses with the supported Mermaid subset, otherwise a short reason."""
+    return mermaid.problem(source)

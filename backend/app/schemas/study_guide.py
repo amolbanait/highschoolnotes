@@ -176,12 +176,58 @@ class PracticeOutput(BaseModel):
     flashcards: list[FlashcardOutput]
 
 
+# ---------- Quality review (a separate, cheaper model) ----------
+
+ProblemKind = Literal[
+    "inaccurate",
+    "unsupported",
+    "changed_formula_or_number",
+    "wrong_example",
+    "mislabelled_origin",
+    "unclear_for_level",
+    "unhelpful_diagram",
+    "missing_key_point",
+    "other",
+]
+
+
+class ReviewScores(BaseModel):
+    accuracy: int = Field(description="0 to 100: every statement agrees with the source")
+    grounding: int = Field(description="0 to 100: claims are supported by the source; nothing invented")
+    examples: int = Field(description="0 to 100: examples and analogies are correct and honestly labelled")
+    clarity: int = Field(description="0 to 100: a student at the stated level can follow it")
+    visuals: int | None = Field(description="0 to 100: the diagram helps understanding; null if no diagram")
+
+
+class ReviewProblem(BaseModel):
+    kind: ProblemKind
+    severity: Literal["major", "minor"] = Field(
+        description="major: a student could learn something false or miss the main idea"
+    )
+    where: str = Field(description="Which part, e.g. 'how_it_works step 2', 'examples 1', 'diagram'")
+    problem: str = Field(description="What is wrong, in one plain sentence a student could understand")
+    fix: str = Field(description="How the writer should fix it, in one sentence")
+
+
+class ReviewOutput(BaseModel):
+    scores: ReviewScores
+    problems: list[ReviewProblem]
+
+
 # ---------- The stored guide document ----------
 
 
 class Quality(BaseModel):
-    score: int | None = None
+    score: int | None = Field(default=None, description="0 to 100 from the review; None if not reviewed")
     flags: list[str] = Field(default_factory=list)
+    reviewed: bool = False
+    rewritten: bool = Field(default=False, description="Rewritten once because the first review was low")
+    needs_checking: bool = Field(
+        default=False, description="Still below the threshold after a rewrite: check it against the source"
+    )
+    problems: list[str] = Field(
+        default_factory=list, description="What the reviewer could not confirm, shown to the student"
+    )
 
 
 class VocabItem(BaseModel):

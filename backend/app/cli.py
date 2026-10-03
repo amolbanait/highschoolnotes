@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{time.monotonic() - started:6.1f}s] {type_} {detail}", file=sys.stderr)
 
     llm = AnthropicLLM(settings)
+    reviewer = AnthropicLLM(settings, model=settings.reviewer_model)
     ctx = orchestrator.PipelineContext(
         segments=[{"ref": s.ref, "text": s.text, "heading_path": s.heading_path} for s in segments],
         level=args.level,
@@ -71,15 +72,25 @@ def main(argv: list[str] | None = None) -> int:
         state={},
         save=lambda stage: None,
         emit=emit,
+        reviewer=reviewer,
     )
     content = orchestrator.run(ctx)
     args.out.write_text(json.dumps(content, indent=2, ensure_ascii=False))
 
     usage = ctx.meter.as_dict()
     print(json.dumps(usage, indent=2), file=sys.stderr)
-    cost = estimate_cost(llm.model, usage["total"])
-    if cost is not None:
-        print(f"Estimated cost: ${cost:.3f} with {llm.model}", file=sys.stderr)
+    costs = [
+        estimate_cost(reviewer.model if stage == "review" else llm.model, stage_usage)
+        for stage, stage_usage in usage["by_stage"].items()
+    ]
+    if None not in costs:
+        print(
+            f"Estimated cost: ${sum(costs):.3f} (writer {llm.model}, reviewer {reviewer.model})",
+            file=sys.stderr,
+        )
+    scores = {r["section_id"]: (r["score"], r["action"]) for r in ctx.state.get("reviews", {}).values()}
+    if scores:
+        print(f"Quality: {orchestrator.quality_score(ctx.state)} overall; {scores}", file=sys.stderr)
     print(f"Wrote {args.out} in {time.monotonic() - started:.0f}s", file=sys.stderr)
     return 0
 

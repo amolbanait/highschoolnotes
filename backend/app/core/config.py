@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     guide_token_budget: int = 600_000
     write_concurrency: int = 4
 
+    # Quality review: a separate, cheaper model scores every section (design doc: below 70 the
+    # section is rewritten once with the problems attached, then flagged if still below).
+    review_enabled: bool = True
+    reviewer_model: str = "claude-sonnet-5-5"
+    review_effort: str = "medium"
+    quality_threshold: int = 70
+
     # Worker
     worker_poll_seconds: float = 1.0
     job_lock_seconds: int = 300

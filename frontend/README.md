@@ -20,6 +20,11 @@ The browser only talks to this app. `next.config.ts` proxies `/api/v1/*` to `API
 Next's own gzip is off because it holds back the progress stream; compress at your reverse
 proxy instead and leave `text/event-stream` uncompressed.
 
+Every finished guide has a **Download or print** menu: PDF, Word, Markdown and a standalone web page
+come from the API (`/api/v1/guides/{id}/export`), and "Printable view" opens `/guides/[id]/print`.
+A section the quality review could not confirm shows "Check this against your source" with what the
+reviewer found.
+
 ## Check it
 
 ```sh
@@ -36,6 +41,7 @@ npm run lint && npm run format:check && npm run typecheck && npm test && npm run
 | `/guides/[id]`            | Watch progress live (stages, topics found, sections as they land), then read the guide: overview, vocabulary, concepts with three explanation levels, diagrams, examples labelled by origin, common mistakes, quick checks, key facts, formulas, connections, summary and checklist. Every citation opens the exact source text. "Explain this more simply" rewrites one section. |
 | `/guides/[id]/quiz`       | Answer practice questions. Multiple choice is graded; open answers are compared with a model answer and self-marked.                                                                                                                                                                                                                                                              |
 | `/guides/[id]/flashcards` | Flip cards and rate them; "Again" cards come back at the end of the deck.                                                                                                                                                                                                                                                                                                         |
+| `/guides/[id]/print`      | The whole guide opened up (all three levels, quick-check answers), then practice questions, a separate answer key and flashcards, ready for the browser's Print.                                                                                                                                                                                                                  |
 | `/account`                | Change name and usual level, sign out, delete everything.                                                                                                                                                                                                                                                                                                                         |
 
 ## Types

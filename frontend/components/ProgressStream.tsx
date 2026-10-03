@@ -14,7 +14,7 @@ export function ProgressStream({
     0,
     STAGES.findIndex((s) => s.key === stage),
   );
-  const { topics, readySections } = progress;
+  const { topics, readySections, reviewedSections } = progress;
 
   return (
     <section aria-live="polite" className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-6">
@@ -54,6 +54,12 @@ export function ProgressStream({
                   <span className="text-slate-500">
                     {" "}
                     ({readySections.length} of {topics.length})
+                  </span>
+                )}
+                {s.key === "review" && state === "active" && topics.length > 0 && (
+                  <span className="text-slate-500">
+                    {" "}
+                    ({reviewedSections.length} of {topics.length})
                   </span>
                 )}
               </span>

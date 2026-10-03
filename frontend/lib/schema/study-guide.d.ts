@@ -41,6 +41,22 @@ export type Understand = string;
 export type LikelyOnTest = boolean;
 export type Prerequisites = string[];
 export type Flags = string[];
+/**
+ * Still below the threshold after a rewrite: check it against the source
+ */
+export type NeedsChecking = boolean;
+/**
+ * What the reviewer could not confirm, shown to the student
+ */
+export type Problems = string[];
+export type Reviewed = boolean;
+/**
+ * Rewritten once because the first review was low
+ */
+export type Rewritten = boolean;
+/**
+ * 0 to 100 from the review; None if not reviewed
+ */
 export type Score = number | null;
 export type A = string;
 export type Q = string;
@@ -188,6 +204,10 @@ export interface Levels {
  */
 export interface Quality {
   flags?: Flags;
+  needs_checking?: NeedsChecking;
+  problems?: Problems;
+  reviewed?: Reviewed;
+  rewritten?: Rewritten;
   score?: Score;
 }
 /**

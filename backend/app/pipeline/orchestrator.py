@@ -14,12 +14,13 @@ from typing import Any
 from app.core.config import Settings
 from app.llm.client import LLM, TokenMeter
 from app.pipeline.grounding import SourceIndex
-from app.pipeline.stages import assemble, plan, practice, sequence, write
+from app.pipeline.stages import assemble, plan, practice, review, sequence, write
+from app.quality.checks import coverage
 from app.schemas.study_guide import StudyGuideContent
 
 log = logging.getLogger(__name__)
 
-STAGES = ("plan", "sequence", "write_sections", "assemble", "practice", "check")
+STAGES = ("plan", "sequence", "write_sections", "review", "assemble", "practice", "check")
 
 
 @dataclass
@@ -32,9 +33,12 @@ class PipelineContext:
     state: dict[str, Any]
     save: Callable[[str], None]
     emit: Callable[[str, dict], None]
+    reviewer: LLM | None = None  # the quality reviewer; the writer model if not given
 
     def __post_init__(self) -> None:
         self.index = SourceIndex(self.segments)
+        if self.reviewer is None:
+            self.reviewer = self.llm
 
 
 def run(ctx: PipelineContext) -> dict:
@@ -59,6 +63,9 @@ def run(ctx: PipelineContext) -> dict:
             )
         elif stage == "write_sections":
             _write_sections(ctx)
+        elif stage == "review":
+            if ctx.settings.review_enabled:
+                _review_sections(ctx)
         elif stage == "assemble":
             state["assemble"] = assemble.run(
                 state["sequence"]["title"], _sections(state), ctx.level, ctx.llm, ctx.meter, ctx.settings
@@ -76,7 +83,7 @@ def run(ctx: PipelineContext) -> dict:
                 ctx.settings,
             )
         elif stage == "check":
-            state["check"] = check(state)
+            state["check"] = check(state, ctx.index)
         state.setdefault("done", []).append(stage)
         ctx.save(stage)
     return build_content(state, ctx.level)
@@ -91,10 +98,26 @@ def regenerate_section(ctx: PipelineContext, concept_id: str, instruction: str |
     section = write.run_one(
         concept, concepts, ctx.index, ctx.level, ctx.llm, ctx.meter, ctx.settings, instruction
     )
+    if ctx.settings.review_enabled:
+        section, report = review.run_one(
+            section,
+            concept,
+            concepts,
+            ctx.index,
+            ctx.level,
+            ctx.llm,
+            ctx.reviewer,
+            ctx.meter,
+            ctx.settings,
+            instruction=instruction,
+        )
+        ctx.state.setdefault("reviews", {})[concept_id] = report
     ctx.state.setdefault("sections", {})[concept_id] = section
-    ctx.state["check"] = check(ctx.state)
+    ctx.state["check"] = check(ctx.state, ctx.index)
     ctx.save("regenerate_section")
     ctx.emit("section_ready", {"section_id": concept_id, "regenerated": True})
+    if section["quality"].get("needs_checking"):
+        ctx.emit("quality_flag", _flag_event(section))
     return build_content(ctx.state, ctx.level)
 
 
@@ -142,13 +165,86 @@ def _write_sections(ctx: PipelineContext) -> None:
             raise error
 
 
+def _review_sections(ctx: PipelineContext) -> None:
+    concepts = ctx.state["sequence"]["concepts"]
+    sections = ctx.state["sections"]
+    reviews = ctx.state.setdefault("reviews", {})
+    todo = [c for c in concepts if c["id"] in sections and c["id"] not in reviews]
+    done = len(concepts) - len(todo)
+    with ThreadPoolExecutor(max_workers=max(1, ctx.settings.write_concurrency)) as pool:
+        futures = {
+            pool.submit(
+                review.run_one,
+                sections[c["id"]],
+                c,
+                concepts,
+                ctx.index,
+                ctx.level,
+                ctx.llm,
+                ctx.reviewer,
+                ctx.meter,
+                ctx.settings,
+            ): c
+            for c in todo
+        }
+        error: BaseException | None = None
+        for future in as_completed(futures):
+            concept = futures[future]
+            try:
+                section, report = future.result()
+            except BaseException as exc:  # keep the first failure; finished reviews stay saved
+                if error is None:
+                    error = exc
+                    for f in futures:
+                        f.cancel()
+                continue
+            done += 1
+            sections[concept["id"]] = section
+            reviews[concept["id"]] = report
+            ctx.save("review")
+            ctx.emit(
+                "section_reviewed",
+                {
+                    "stage": "review",
+                    "section_id": concept["id"],
+                    "action": report["action"],
+                    "done": done,
+                    "total": len(concepts),
+                },
+            )
+            if report["action"] == "regenerated":
+                ctx.emit(
+                    "section_ready", {"stage": "review", "section_id": concept["id"], "regenerated": True}
+                )
+            if section["quality"].get("needs_checking"):
+                ctx.emit("quality_flag", _flag_event(section))
+        if error is not None:
+            raise error
+
+
+def _flag_event(section: dict) -> dict:
+    quality = section["quality"]
+    return {
+        "section_id": section["id"],
+        "title": section["title"],
+        "score": quality.get("score"),
+        "problems": quality.get("problems", []),
+    }
+
+
+def quality_score(state: dict) -> int | None:
+    """The guide's score: the mean of its reviewed sections' scores."""
+    scores = [r["score"] for r in state.get("reviews", {}).values() if r.get("score") is not None]
+    return round(sum(scores) / len(scores)) if scores else None
+
+
 def _sections(state: dict) -> list[dict]:
     sections = state.get("sections", {})
     return [sections[c["id"]] for c in state["sequence"]["concepts"] if c["id"] in sections]
 
 
-def check(state: dict) -> dict:
-    """Deterministic checks over the assembled guide. The model review is added in the quality stage."""
+def check(state: dict, index: SourceIndex | None = None) -> dict:
+    """Guide-level checks done by code, after the per-section review."""
     seq = state["sequence"]
     sections = state.get("sections", {})
     missing = [c["id"] for c in seq["concepts"] if c["id"] not in sections]
@@ -159,12 +255,17 @@ def check(state: dict) -> dict:
     unreferenced_questions = [
         q["id"] for q in state.get("practice", {}).get("questions", []) if not q["source_refs"]
     ]
-    return {
+    result = {
         "missing_sections": missing,
         "unverified_quotes": unverified,
         "section_flags": flagged,
+        "needs_checking": [cid for cid, s in sections.items() if s["quality"].get("needs_checking")],
         "unreferenced_questions": unreferenced_questions,
+        "quality_score": quality_score(state),
     }
+    if index is not None:
+        result["coverage"] = coverage(state, index)
+    return result
 
 
 def build_content(state: dict, level: str) -> dict:
@@ -180,6 +281,19 @@ def build_content(state: dict, level: str) -> dict:
         warnings.append(
             f"{len(checks['unverified_quotes'])} quoted item(s) could not be matched word for word to the source; "
             "they are marked for checking."
+        )
+    if checks and checks.get("needs_checking"):
+        count = len(checks["needs_checking"])
+        warnings.append(
+            f"{count} section(s) could not be fully confirmed against your material; "
+            'they are marked "Check this against your source".'
+        )
+    gaps = (checks or {}).get("coverage") or {}
+    if gaps.get("uncited_share", 0) > 0.25:
+        where = f" ({'; '.join(gaps['uncited_headings'][:4])})" if gaps.get("uncited_headings") else ""
+        warnings.append(
+            f"About {round(gaps['uncited_share'] * 100)}% of your material is not used in this guide{where}. "
+            "Check whether anything important is missing."
         )
     content = StudyGuideContent(
         title=seq["title"],

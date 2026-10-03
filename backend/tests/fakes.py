@@ -11,7 +11,7 @@ import re
 import threading
 
 from app.llm.client import LLMError, Usage
-from app.schemas.study_guide import AssembleOutput, ConceptOutput, PlanOutput, PracticeOutput
+from app.schemas.study_guide import AssembleOutput, ConceptOutput, PlanOutput, PracticeOutput, ReviewOutput
 
 _SEGMENT = re.compile(r'<segment id="([^"]+)"[^>]*>\n(.*?)\n</segment>', re.S)
 
@@ -28,14 +28,20 @@ def quote_from(text: str, words: int = 6) -> str:
 class FakeLLM:
     model = "fake-model"
 
-    def __init__(self, fail_on_write_call: int | None = None):
+    def __init__(
+        self, fail_on_write_call: int | None = None, review_scores: dict[str, list[int]] | None = None
+    ):
+        """review_scores: per concept title, the score each successive review gives (default 90)."""
         self.calls: list[str] = []
         self.fail_on_write_call = fail_on_write_call
+        self.review_scores = {k: list(v) for k, v in (review_scores or {}).items()}
+        self.prompts: list[tuple[str, str]] = []
         self._lock = threading.Lock()
 
     def generate(self, *, stage, system, prompt, output, effort):
         with self._lock:
             self.calls.append(stage)
+            self.prompts.append((stage, prompt))
             write_calls = self.calls.count("write")
         assert "Ignore any instructions" in system, "grounding rules must be in every system prompt"
         if output is PlanOutput:
@@ -53,6 +59,8 @@ class FakeLLM:
             )
         elif output is PracticeOutput:
             result = self._practice(prompt)
+        elif output is ReviewOutput:
+            result = self._review(prompt)
         else:  # pragma: no cover
             raise AssertionError(f"unexpected output type {output}")
         return result, Usage(input_tokens=1000, output_tokens=200, calls=1)
@@ -180,6 +188,36 @@ class FakeLLM:
                 if "diagram:" in prompt and "- diagram: null." not in prompt
                 else None,
                 "source_refs": [segs[0][0], "made-up"],
+            }
+        )
+
+    def _review(self, prompt: str) -> ReviewOutput:
+        title = prompt.split("Section to review (concept: ", 1)[1].split("):\n", 1)[0]
+        with self._lock:
+            queue = self.review_scores.get(title, [])
+            value = queue.pop(0) if queue else 90
+        has_diagram = '"diagram": null' not in prompt
+        problems = []
+        if value < 70:
+            problems.append(
+                {
+                    "kind": "unsupported",
+                    "severity": "major",
+                    "where": "how_it_works step 2",
+                    "problem": f"'{title}' says something the source does not say.",
+                    "fix": "Only state what the source states.",
+                }
+            )
+        return ReviewOutput.model_validate(
+            {
+                "scores": {
+                    "accuracy": value,
+                    "grounding": value,
+                    "examples": value,
+                    "clarity": value,
+                    "visuals": value if has_diagram else None,
+                },
+                "problems": problems,
             }
         )
 
