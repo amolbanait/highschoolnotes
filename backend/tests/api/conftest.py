@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import create_engine, text
 
-from tests.fakes import FakeLLM
+from tests.fakes import FakeLLM, FakeTranscriber, FakeVision
 
 TABLES = (
     "flashcard_reviews, quiz_attempts, quality_reports, guide_events, generation_jobs, guide_sources, "
@@ -46,7 +46,17 @@ def llm():
 
 
 @pytest.fixture
-def work(llm):
+def vision():
+    return FakeVision()
+
+
+@pytest.fixture
+def transcriber():
+    return FakeTranscriber()
+
+
+@pytest.fixture
+def work(llm, vision, transcriber):
     """Run queued jobs until the queue is empty, like the worker would."""
     from app.core.config import get_settings
     from app.storage.files import get_storage
@@ -54,7 +64,9 @@ def work(llm):
 
     def _work(max_jobs: int = 20) -> int:
         ran = 0
-        while ran < max_jobs and run_once(llm, get_storage(), get_settings()):
+        while ran < max_jobs and run_once(
+            llm, get_storage(), get_settings(), vision=vision, transcriber=transcriber
+        ):
             ran += 1
         return ran
 

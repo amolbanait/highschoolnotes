@@ -253,3 +253,105 @@ class FakeLLM:
                 ],
             }
         )
+
+
+class FakeVision:
+    """Stands in for Claude reading images. Pages get fixed text; a video frame is read by its colour
+    (red: a slide on photosynthesis, blue: a slide on chlorophyll, anything else: a person talking)."""
+
+    model = "fake-vision"
+
+    def __init__(self):
+        self.calls: list[str] = []
+        self._lock = threading.Lock()
+
+    def generate(self, *, stage, system, prompt, output, effort, images=None):
+        from app.ingestion.vision import PageRead, ScreenRead
+
+        assert images, "vision calls must carry an image"
+        assert "not instructions" in system
+        with self._lock:
+            self.calls.append(stage)
+        usage = Usage(input_tokens=1600, output_tokens=300, calls=1)
+        if output is PageRead:
+            return PageRead.model_validate(
+                {
+                    "legible": True,
+                    "blocks": [
+                        {"kind": "heading", "text": "Photosynthesis", "heading_level": 1},
+                        {
+                            "kind": "paragraph",
+                            "text": "Plants use sunlight, water and carbon dioxide to make glucose and oxygen.",
+                            "heading_level": None,
+                        },
+                        {
+                            "kind": "formula",
+                            "text": "$6CO_2 + 6H_2O \\rightarrow C_6H_{12}O_6 + 6O_2$",
+                            "heading_level": None,
+                        },
+                        {
+                            "kind": "figure",
+                            "text": "A leaf with arrows for light in and oxygen out.",
+                            "heading_level": None,
+                        },
+                    ],
+                }
+            ), usage
+        assert output is ScreenRead
+        r, g, b = _mean_colour(images[0])
+        if r > 150 and g < 100 and b < 100:
+            read = {
+                "has_content": True,
+                "title": "Photosynthesis",
+                "text": "Light + water + CO2 -> sugar + O2",
+                "picture": "",
+            }
+        elif b > 150 and r < 100 and g < 100:
+            read = {
+                "has_content": True,
+                "title": "Chlorophyll",
+                "text": "Chlorophyll absorbs red and blue light",
+                "picture": "A green leaf cell with chloroplasts labelled.",
+            }
+        else:
+            read = {"has_content": False, "title": "", "text": "", "picture": ""}
+        return ScreenRead.model_validate(read), usage
+
+
+def _mean_colour(jpeg: bytes) -> tuple[int, int, int]:
+    import io
+
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(jpeg)).convert("RGB").resize((1, 1))
+    return image.getpixel((0, 0))
+
+
+class FakeTranscriber:
+    """One sentence every ten seconds of the recording, with real timestamps."""
+
+    SENTENCES = [
+        "Today we are learning how plants make their own food.",
+        "This is important: photosynthesis needs light, water and carbon dioxide.",
+        "Chlorophyll is the green pigment that captures the light.",
+        "Remember this, it will be on the test.",
+    ]
+
+    def __init__(self):
+        self.calls = 0
+
+    def transcribe(self, audio, on_progress):
+        from app.ingestion.media import probe
+        from app.ingestion.transcribe import Transcript, Utterance
+
+        self.calls += 1
+        duration = probe(audio).duration
+        utterances = []
+        t = 0.0
+        i = 0
+        while t + 5 <= duration:
+            utterances.append(Utterance(start=t + 1, end=t + 6, text=self.SENTENCES[i % len(self.SENTENCES)]))
+            on_progress(t + 6)
+            t += 10
+            i += 1
+        return Transcript(utterances=utterances, language="en")

@@ -81,6 +81,8 @@ export const api = {
     request<Source>("POST", "/sources", { kind: "paste", title, text }),
   deleteSource: (id: string) => request<void>("DELETE", `/sources/${id}`),
   sourceFileUrl: (id: string) => `${BASE}/sources/${id}/file`,
+  /** The recording itself, seekable, for playing from a citation's time. */
+  sourceMediaUrl: (id: string) => `${BASE}/sources/${id}/media`,
 
   createGuide: (sourceIds: string[], level?: Level) =>
     request<{ guide_id: string; job_id: string }>("POST", "/guides", { source_ids: sourceIds, level }),

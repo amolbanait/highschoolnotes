@@ -2,7 +2,9 @@
 
 from html import escape
 
-PROMPT_VERSION = "2026-10-03.1"
+from app.ingestion.segment import clock
+
+PROMPT_VERSION = "2026-10-03.2"
 
 LEVEL_GUIDANCE = {
     "middle_school": (
@@ -53,13 +55,37 @@ def system_prompt(role: str, level: str) -> str:
     )
 
 
+RECORDING_NOTE = """\
+Some of this material comes from a recording. Segments with type="speech" are an automatic \
+transcript of what was said, starting at the given time: it may mishear words, especially names and \
+technical terms, so prefer the spelling shown on screen. Segments with type="on screen" are what a slide \
+or board showed at that time. Leave out greetings, small talk, class logistics and filler; keep every \
+explanation, example, definition, formula and conclusion. The speaker stressing a point ("this is \
+important", "remember this", "this will be on the test", "the key point is", saying it again, or a \
+slide highlighting it) is source emphasis; whether something is likely to be tested is your own \
+judgement, and the two are kept apart."""
+
+PICTURE_NOTE = """\
+Text starting "[Picture, described by AI]" or "[On screen, described by AI]" is an AI description of a \
+picture, not the source's own words: use it to understand the material, but never quote it."""
+
+
 def render_segments(segments: list[dict]) -> str:
     """Segments as tagged blocks. Text is escaped so source content cannot close the tags."""
     parts = []
+    timed = described = False
     for seg in segments:
         heading = " > ".join(seg.get("heading_path") or [])
         attrs = f'id="{escape(seg["ref"], quote=True)}"'
         if heading:
             attrs += f' section="{escape(heading, quote=True)}"'
+        locator = seg.get("locator") or {}
+        if locator.get("kind") == "time":
+            timed = True
+            attrs += f' time="{clock(locator.get("start") or 0)}"'
+            attrs += ' type="on screen"' if locator.get("on_screen") else ' type="speech"'
+        if "described by AI]" in seg["text"]:
+            described = True
         parts.append(f"<segment {attrs}>\n{escape(seg['text'], quote=False)}\n</segment>")
-    return "<source>\n" + "\n".join(parts) + "\n</source>"
+    notes = [n for n, used in ((RECORDING_NOTE, timed), (PICTURE_NOTE, described)) if used]
+    return "<source>\n" + "\n".join(parts) + "\n</source>" + "".join(f"\n\n{n}" for n in notes)

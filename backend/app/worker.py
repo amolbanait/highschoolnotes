@@ -7,6 +7,7 @@ import time
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import get_sessionmaker
+from app.ingestion.transcribe import Transcriber, WhisperTranscriber
 from app.llm.client import LLM, AnthropicLLM
 from app.pipeline import jobs
 from app.storage.files import Storage, get_storage
@@ -14,7 +15,14 @@ from app.storage.files import Storage, get_storage
 log = logging.getLogger("worker")
 
 
-def run_once(llm: LLM, storage: Storage, settings: Settings, reviewer: LLM | None = None) -> bool:
+def run_once(
+    llm: LLM,
+    storage: Storage,
+    settings: Settings,
+    reviewer: LLM | None = None,
+    vision: LLM | None = None,
+    transcriber: Transcriber | None = None,
+) -> bool:
     """Claim and run one job. Returns False when the queue is empty."""
     Session_ = get_sessionmaker()
     with Session_() as db:
@@ -24,7 +32,7 @@ def run_once(llm: LLM, storage: Storage, settings: Settings, reviewer: LLM | Non
         job_id, kind = job.id, job.kind
     log.info("running job %s (%s)", job_id, kind)
     started = time.monotonic()
-    jobs.run_job(Session_, job_id, llm, storage, settings, reviewer)
+    jobs.run_job(Session_, job_id, llm, storage, settings, reviewer, vision, transcriber)
     log.info("job %s finished in %.1fs", job_id, time.monotonic() - started)
     return True
 
@@ -34,6 +42,8 @@ def main() -> None:
     settings = get_settings()
     llm = AnthropicLLM(settings)
     reviewer = AnthropicLLM(settings, model=settings.reviewer_model)
+    vision = AnthropicLLM(settings, model=settings.vision_model)
+    transcriber = WhisperTranscriber(settings)
     storage = get_storage()
     stopping = False
 
@@ -52,7 +62,7 @@ def main() -> None:
     )
     while not stopping:
         try:
-            if not run_once(llm, storage, settings, reviewer):
+            if not run_once(llm, storage, settings, reviewer, vision, transcriber):
                 time.sleep(settings.worker_poll_seconds)
         except Exception:
             log.exception("worker loop error")

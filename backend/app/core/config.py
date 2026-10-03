@@ -35,6 +35,23 @@ class Settings(BaseSettings):
     review_effort: str = "medium"
     quality_threshold: int = 70
 
+    # Phase 2 inputs: audio, video, scans and photos.
+    # Recordings can be much larger than documents; their length is limited in minutes instead.
+    max_media_bytes: int = 1024 * 1024 * 1024
+    max_media_minutes: int = 120
+    # Claude reads scanned pages, photos and video frames (equations, tables, handwriting, diagrams).
+    vision_enabled: bool = True
+    vision_model: str = "claude-sonnet-5-5"
+    vision_effort: str = "low"
+    vision_concurrency: int = 4
+    max_video_frames: int = 60
+    # Speech to text runs on the worker with faster-whisper, so recordings never leave the server.
+    # Sizes: tiny, base, small, medium, large-v3 (bigger is slower and more accurate).
+    whisper_model: str = "small"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    whisper_cache_dir: str | None = None
+
     # Worker
     worker_poll_seconds: float = 1.0
     job_lock_seconds: int = 300

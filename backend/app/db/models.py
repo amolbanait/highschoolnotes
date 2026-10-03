@@ -6,6 +6,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -59,7 +60,8 @@ class Source(Base):
 
     id: Mapped[uuid.UUID] = _id()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # pdf, docx, txt, markdown, paste
+    # pdf, docx, txt, markdown, paste, image, audio, video
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     filename: Mapped[str | None] = mapped_column(String(300))
     mime: Mapped[str | None] = mapped_column(String(120))
@@ -70,8 +72,11 @@ class Source(Base):
         String(16), nullable=False, default="extracting"
     )  # extracting, ready, failed
     page_count: Mapped[int | None] = mapped_column(Integer)
+    duration_seconds: Mapped[float | None] = mapped_column(Float)  # audio and video
     word_count: Mapped[int | None] = mapped_column(Integer)
     warnings: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    # Model tokens spent reading scans, photos and video frames (not counted against a guide).
+    extraction_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _created()
 

@@ -15,6 +15,7 @@ export function levelLabel(level: string): string {
 /** Pipeline stages in order, as the worker names them, with what the student sees. */
 export const STAGES: { key: string; label: string }[] = [
   { key: "queued", label: "Waiting to start" },
+  { key: "extract", label: "Getting your files ready" },
   { key: "plan", label: "Reading your material and finding the main ideas" },
   { key: "sequence", label: "Putting the ideas in a good learning order" },
   { key: "write_sections", label: "Writing explanations and examples" },
@@ -49,6 +50,7 @@ export const FACT_KINDS: Record<string, string> = {
 /**
  * A citation like "p12-s3" as a student reads it. Guides built from several sources prefix
  * the source number: "d2-p12-s3". Non-paged sources (Word, text, paste) use "s7".
+ * Recordings carry the time: "t14m32s" is speech from 14:32, "v14m32s" what was on screen then.
  */
 export function refLabel(ref: string): string {
   let rest = ref;
@@ -62,7 +64,22 @@ export function refLabel(ref: string): string {
   if (paged) return `${doc}p. ${paged[1]}`;
   const flowing = /^s(\d+)$/.exec(rest);
   if (flowing) return `${doc}part ${flowing[1]}`;
+  const timed = /^([tv])(?:(\d+)h)?(\d+)m(\d+)s(?:-\d+)?$/.exec(rest);
+  if (timed) {
+    const [, kind, h, m, s] = timed;
+    const time = h ? `${Number(h)}:${m.padStart(2, "0")}:${s}` : `${Number(m)}:${s}`;
+    return `${doc}${time}${kind === "v" ? " on screen" : ""}`;
+  }
   return ref;
+}
+
+/** Seconds as a clock: 872 -> "14:32", 3725 -> "1:02:05". */
+export function formatClock(seconds: number): string {
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
 export function formatDate(iso: string): string {

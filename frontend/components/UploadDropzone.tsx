@@ -2,9 +2,34 @@
 
 import { useRef, useState } from "react";
 
-export const ACCEPTED = ".pdf,.docx,.txt,.md,.markdown";
+const DOCUMENTS = ["pdf", "docx", "txt", "md", "markdown", "png", "jpg", "jpeg", "webp"];
+const RECORDINGS = [
+  "mp3",
+  "m4a",
+  "wav",
+  "ogg",
+  "oga",
+  "opus",
+  "flac",
+  "aac",
+  "mp4",
+  "m4v",
+  "mov",
+  "webm",
+  "mkv",
+];
+export const ACCEPTED = [...DOCUMENTS, ...RECORDINGS].map((e) => `.${e}`).join(",");
 export const MAX_BYTES = 20 * 1024 * 1024;
+export const MAX_MEDIA_BYTES = 1024 * 1024 * 1024;
 const MAX_FILES = 5;
+
+/** The size limit for a file: recordings and videos may be much larger than documents. */
+export function limitFor(name: string): number | null {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (RECORDINGS.includes(ext)) return MAX_MEDIA_BYTES;
+  if (DOCUMENTS.includes(ext)) return MAX_BYTES;
+  return null;
+}
 
 /** Drag-and-drop or click to choose up to five files. Checks type and size before upload. */
 export function UploadDropzone({ files, onChange }: { files: File[]; onChange: (files: File[]) => void }) {
@@ -16,13 +41,15 @@ export function UploadDropzone({ files, onChange }: { files: File[]; onChange: (
     if (!list) return;
     const next = [...files];
     for (const f of Array.from(list)) {
-      const ext = f.name.toLowerCase().split(".").pop() ?? "";
-      if (!["pdf", "docx", "txt", "md", "markdown"].includes(ext)) {
-        setProblem(`${f.name}: use a PDF, Word (.docx), text or Markdown file.`);
+      const limit = limitFor(f.name);
+      if (limit === null) {
+        setProblem(
+          `${f.name}: use a PDF, Word, text or Markdown file, a photo (PNG, JPEG, WebP), a recording (MP3, M4A, WAV) or a video (MP4, MOV, WebM).`,
+        );
         continue;
       }
-      if (f.size > MAX_BYTES) {
-        setProblem(`${f.name} is larger than 20 MB.`);
+      if (f.size > limit) {
+        setProblem(`${f.name} is larger than ${formatBytes(limit)}.`);
         continue;
       }
       if (next.length >= MAX_FILES) {
@@ -52,8 +79,12 @@ export function UploadDropzone({ files, onChange }: { files: File[]; onChange: (
           dragging ? "border-indigo-500 bg-indigo-50" : "border-slate-300 bg-slate-50"
         }`}
       >
-        <p className="font-medium text-slate-800">Drop your notes, handout or chapter here</p>
-        <p className="mt-1 text-sm text-slate-500">PDF, Word (.docx), text or Markdown · up to 20 MB each</p>
+        <p className="font-medium text-slate-800">Drop your notes, handout, chapter or lecture here</p>
+        <p className="mt-1 text-sm text-slate-500">
+          PDF, Word, text, photos and scans · up to 20 MB each
+          <br />
+          Lecture recordings and class videos · up to 1 GB and 2 hours each
+        </p>
         <button
           type="button"
           onClick={() => input.current?.click()}
@@ -102,5 +133,6 @@ export function UploadDropzone({ files, onChange }: { files: File[]; onChange: (
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024 * 1024 * 1024 && n % (1024 * 1024 * 1024) === 0) return `${n / (1024 * 1024 * 1024)} GB`;
+  return `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
 }

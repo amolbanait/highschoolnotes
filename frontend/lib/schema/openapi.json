@@ -513,6 +513,17 @@
             "title": "Created At",
             "type": "string"
           },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
           "error": {
             "anyOf": [
               {
@@ -589,6 +600,7 @@
           "byte_size",
           "status",
           "page_count",
+          "duration_seconds",
           "word_count",
           "warnings",
           "error",
@@ -1951,6 +1963,64 @@
           }
         },
         "summary": "Get File",
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/api/v1/sources/{source_id}/media": {
+      "get": {
+        "description": "The recording or image itself, inline and seekable (HTTP Range), for the player beside citations.",
+        "operationId": "get_media_api_v1_sources__source_id__media_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "hsn_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hsn Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Media",
         "tags": [
           "sources"
         ]

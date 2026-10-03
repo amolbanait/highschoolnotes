@@ -1,4 +1,4 @@
-"""Text-based PDFs via PyMuPDF. Scanned pages are detected and reported (OCR is Phase 2)."""
+"""PDFs via PyMuPDF. Pages with no selectable text (scans) are rendered and read by Claude's vision."""
 
 import re
 import statistics
@@ -6,7 +6,9 @@ from collections import Counter
 
 import pymupdf as fitz
 
-from app.ingestion.base import Block, ExtractionError, ExtractResult
+from app.ingestion.base import Block, ExtractionError, ExtractResult, ExtractTools
+from app.ingestion.image import ocr_warning
+from app.ingestion.vision import MAX_EDGE, read_pages
 
 _PAGE_NUMBER = re.compile(r"^\s*(?:page\s*)?\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?\s*$", re.IGNORECASE)
 _SCANNED_PAGE_CHARS = 25
@@ -14,6 +16,13 @@ _SCANNED_PAGE_CHARS = 25
 
 class PdfExtractor:
     kinds = ("pdf",)
+
+    def __init__(self, tools: ExtractTools | None = None):
+        self.tools = tools
+
+    @property
+    def can_ocr(self) -> bool:
+        return bool(self.tools and self.tools.vision and self.tools.settings.vision_enabled)
 
     def extract(self, data: bytes) -> ExtractResult:
         try:
@@ -40,16 +49,38 @@ class PdfExtractor:
                     sizes.extend([size] * max(1, len(text) // 40))
             pages.append(page_blocks)
         page_count = len(pages)
-        doc.close()
 
         scanned = [
             i + 1 for i, blocks in enumerate(pages) if sum(len(t) for t, _ in blocks) < _SCANNED_PAGE_CHARS
         ]
-        if page_count and len(scanned) > page_count / 2:
+        ocr_blocks: dict[int, list[Block]] = {}
+        if scanned and self.can_ocr:
+            assert self.tools is not None
+            max_pages = self.tools.settings.max_pages
+            if page_count > max_pages:
+                doc.close()
+                raise ExtractionError(
+                    "source_too_long",
+                    f"This file has {page_count} pages. The limit is {max_pages} pages per guide; "
+                    "split it into parts and upload each one.",
+                )
+            # Blank pages (no picture, no drawing) are not worth a model call.
+            images = {
+                n: _render(doc[n - 1])
+                for n in scanned
+                if doc[n - 1].get_images() or doc[n - 1].get_drawings()
+            }
+            doc.close()
+            ocr_blocks = read_pages(self.tools, images) if images else {}
+        else:
+            doc.close()
+        if not ocr_blocks and page_count and len(scanned) > page_count / 2:
             raise ExtractionError(
                 "scanned_document",
-                "This looks like a scanned document with no selectable text. Scanned files are not supported yet; "
-                "upload a text-based PDF or a Word file instead.",
+                "This looks like a scanned document with no selectable text, and reading scans is turned off "
+                "on this server. Upload a text-based PDF or a Word file instead."
+                if not self.can_ocr
+                else "No readable text was found in this PDF.",
                 {"scanned_pages": scanned},
             )
 
@@ -61,6 +92,9 @@ class PdfExtractor:
 
         blocks: list[Block] = []
         for page_no, page_blocks in enumerate(pages, start=1):
+            if page_no in ocr_blocks:
+                blocks.extend(ocr_blocks[page_no])
+                continue
             for index, (text, size) in enumerate(page_blocks):
                 edge = index == 0 or index == len(page_blocks) - 1
                 if _PAGE_NUMBER.match(text) or (edge and _edge_key(text) in repeated):
@@ -74,7 +108,9 @@ class PdfExtractor:
                     blocks.append(Block(text=text, kind="paragraph", page=page_no))
 
         warnings = []
-        if scanned:
+        if ocr_blocks:
+            warnings.append(ocr_warning(sorted(ocr_blocks)))
+        elif scanned:
             warnings.append(
                 {
                     "code": "scanned_pages",
@@ -82,7 +118,15 @@ class PdfExtractor:
                     "pages": scanned,
                 }
             )
-        return ExtractResult(blocks=blocks, page_count=page_count, paged=True, warnings=warnings)
+        usage = self.tools.usage.as_dict() if self.tools and self.tools.usage else {}
+        return ExtractResult(blocks=blocks, page_count=page_count, paged=True, warnings=warnings, usage=usage)
+
+
+def _render(page) -> bytes:
+    """The page as a PNG whose longest edge is about MAX_EDGE pixels."""
+    longest = max(page.rect.width, page.rect.height) or 1
+    zoom = min(MAX_EDGE / longest, 4.0)
+    return page.get_pixmap(matrix=fitz.Matrix(zoom, zoom)).tobytes("png")
 
 
 def _block_text(block: dict) -> tuple[str, float]:

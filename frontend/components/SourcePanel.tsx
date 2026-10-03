@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
-import { refLabel } from "@/lib/labels";
+import { formatClock, refLabel } from "@/lib/labels";
 import type { GuideRef } from "@/lib/types";
 
 type Ctx = { open: (ref: string) => void };
@@ -98,11 +98,43 @@ function SourcePanel({ guideId, refId, onClose }: { guideId: string; refId: stri
       {data && (
         <>
           {headings.length > 0 && <p className="mb-2 text-xs text-slate-500">{headings.join(" › ")}</p>}
+          {data.locator.kind === "time" && <RecordingClip data={data} />}
           <blockquote className="whitespace-pre-wrap border-l-4 border-indigo-200 pl-4 text-sm leading-relaxed text-slate-800">
             {data.text}
           </blockquote>
         </>
       )}
     </aside>
+  );
+}
+
+/** Plays the recording from the cited moment, with a note on what kind of text is shown. */
+function RecordingClip({ data }: { data: GuideRef }) {
+  const start = typeof data.locator.start === "number" ? data.locator.start : 0;
+  const onScreen = data.locator.on_screen === true;
+  const isVideo = data.locator.media === "video";
+  const src = `${api.sourceMediaUrl(String(data.source_id))}#t=${start}`;
+  const seek = (e: React.SyntheticEvent<HTMLMediaElement>) => {
+    e.currentTarget.currentTime = start;
+  };
+  return (
+    <div className="mb-3 space-y-2">
+      {isVideo ? (
+        <video
+          controls
+          preload="metadata"
+          src={src}
+          onLoadedMetadata={seek}
+          className="w-full rounded-lg bg-black"
+        />
+      ) : (
+        <audio controls preload="metadata" src={src} onLoadedMetadata={seek} className="w-full" />
+      )}
+      <p className="text-xs text-slate-500">
+        {onScreen
+          ? `What was on screen from ${formatClock(start)}, read by AI. Check it against the video.`
+          : `What was said from ${formatClock(start)}, transcribed automatically. Words can be misheard.`}
+      </p>
+    </div>
   );
 }
