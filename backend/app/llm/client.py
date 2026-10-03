@@ -5,6 +5,7 @@ Pydantic model, retries once with the validation error if the output does not fi
 token usage against the guide's budget.
 """
 
+import base64
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -115,7 +116,14 @@ class LLM(Protocol):
     model: str
 
     def generate(
-        self, *, stage: str, system: str, prompt: str, output: type[T], effort: str
+        self,
+        *,
+        stage: str,
+        system: str,
+        prompt: str,
+        output: type[T],
+        effort: str,
+        images: list[bytes] | None = None,
     ) -> tuple[T, Usage]: ...
 
 
@@ -128,9 +136,19 @@ class AnthropicLLM:
         self.client = client or anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=3)
 
     def generate(
-        self, *, stage: str, system: str, prompt: str, output: type[T], effort: str
+        self,
+        *,
+        stage: str,
+        system: str,
+        prompt: str,
+        output: type[T],
+        effort: str,
+        images: list[bytes] | None = None,
     ) -> tuple[T, Usage]:
-        messages: list[dict] = [{"role": "user", "content": prompt}]
+        content: str | list[dict] = prompt
+        if images:
+            content = [*(_image_block(i) for i in images), {"type": "text", "text": prompt}]
+        messages: list[dict] = [{"role": "user", "content": content}]
         usage = Usage()
         for attempt in range(2):
             message = self._call(system, messages, output, effort)
@@ -191,6 +209,19 @@ class AnthropicLLM:
             ) from exc
         except anthropic.APIConnectionError as exc:
             raise LLMError("ai_unreachable", "Could not reach the AI service.") from exc
+
+
+def _image_block(data: bytes) -> dict:
+    if data.startswith(b"\x89PNG"):
+        media_type = "image/png"
+    elif data.startswith(b"\xff\xd8"):
+        media_type = "image/jpeg"
+    else:
+        raise ValueError("images must be PNG or JPEG")
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(data).decode()},
+    }
 
 
 def _add_usage(total: Usage, usage) -> None:

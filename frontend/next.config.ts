@@ -15,6 +15,10 @@ const nextConfig: NextConfig = {
   experimental: {
     // The progress stream sends a keep-alive every 15 s; allow long quiet gaps anyway.
     proxyTimeout: 120_000,
+    // Without this, Next cuts proxied request bodies at 10 MB, which breaks uploads larger than
+    // that. Next holds a proxied body in memory, so in production route /api/v1/* to the API
+    // at the reverse proxy instead of through this rewrite.
+    proxyClientMaxBodySize: "1100mb",
   },
 };
 

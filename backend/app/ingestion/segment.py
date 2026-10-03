@@ -2,6 +2,10 @@
 
 Segments break on headings and never cross a page, so every citation resolves to one page.
 Refs are p12-s3 (page 12, third segment on it) for paged sources and s7 for flowing text.
+
+Recordings are cut into stretches of speech of at most two minutes, so a citation lands close to
+the moment it refers to. Refs carry the start time: t14m32s is speech from 14:32, v14m32s is what
+was on screen from 14:32, and t1h02m05s is past the hour.
 """
 
 import math
@@ -22,7 +26,12 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
+MAX_SPEECH_SECONDS = 120
+
+
 def segment(result: ExtractResult) -> list[Segment]:
+    if result.timed:
+        return segment_timed(result)
     segments: list[Segment] = []
     heading_path: list[tuple[int, str]] = []
     current: list[str] = []
@@ -90,7 +99,16 @@ def _clean(blocks: list[Block]) -> list[Block]:
         text = re.sub(r"[ \t ]+", " ", block.text).strip()
         if not text:
             continue
-        cleaned.append(Block(text=text, kind=block.kind, page=block.page, heading_level=block.heading_level))
+        cleaned.append(
+            Block(
+                text=text,
+                kind=block.kind,
+                page=block.page,
+                heading_level=block.heading_level,
+                start=block.start,
+                end=block.end,
+            )
+        )
     return cleaned
 
 
@@ -119,3 +137,86 @@ def _split_long(text: str) -> list[str]:
         if piece:
             out.append(piece)
     return out
+
+
+def clock(seconds: float) -> str:
+    """14:32, or 1:02:05 past the hour."""
+    total = int(seconds)
+    h, m, s = total // 3600, total % 3600 // 60, total % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def time_ref(prefix: str, seconds: float) -> str:
+    total = int(seconds)
+    h, m, s = total // 3600, total % 3600 // 60, total % 60
+    return f"{prefix}{h}h{m:02d}m{s:02d}s" if h else f"{prefix}{m}m{s:02d}s"
+
+
+def segment_timed(result: ExtractResult) -> list[Segment]:
+    """Speech in stretches of about 500 tokens or two minutes; each on-screen picture on its own.
+
+    A slide's title becomes the section for the speech that follows it, so the outline of a
+    lecture follows its slides.
+    """
+    segments: list[Segment] = []
+    used: set[str] = set()
+    section: str | None = None
+    pending: list[Block] = []
+
+    def add(prefix: str, blocks: list[Block], on_screen: bool) -> None:
+        text = (
+            "\n".join(b.text for b in blocks).strip()
+            if on_screen
+            else " ".join(b.text for b in blocks).strip()
+        )
+        if not text:
+            return
+        start = blocks[0].start or 0.0
+        end = max((b.end or b.start or 0.0) for b in blocks)
+        ref = base = time_ref(prefix, start)
+        n = 2
+        while ref in used:
+            ref = f"{base}-{n}"
+            n += 1
+        used.add(ref)
+        locator = {
+            "kind": "time",
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "media": result.media,
+            "on_screen": on_screen,
+            "section": section,
+        }
+        segments.append(
+            Segment(
+                ordinal=len(segments),
+                ref=ref,
+                locator=locator,
+                heading_path=[section] if section else [],
+                text=text,
+                token_count=estimate_tokens(text),
+            )
+        )
+
+    def flush() -> None:
+        nonlocal pending
+        if pending:
+            add("t", pending, on_screen=False)
+        pending = []
+
+    for block in _clean(result.blocks):
+        if block.kind == "on_screen":
+            flush()
+            title = block.text.split("\n", 1)[0]
+            if len(title) <= 120 and not title.startswith("["):
+                section = title
+            add("v", [block], on_screen=True)
+            continue
+        if pending:
+            span = (block.end or block.start or 0.0) - (pending[0].start or 0.0)
+            tokens = estimate_tokens(" ".join(b.text for b in pending + [block]))
+            if span > MAX_SPEECH_SECONDS or tokens > TARGET_TOKENS:
+                flush()
+        pending.append(block)
+    flush()
+    return segments

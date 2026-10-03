@@ -74,7 +74,8 @@ class ExportInfo:
         return LEVEL_LABELS.get(self.level, self.level)
 
     def ref_label(self, ref: str) -> str:
-        """'p12-s3' -> 'p. 12'; 's7' -> 'part 7'; 'd2-p4-s1' -> 'Source 2, p. 4' (as the web app shows them)."""
+        """'p12-s3' -> 'p. 12'; 's7' -> 'part 7'; 'd2-p4-s1' -> 'Source 2, p. 4'; 't14m32s' -> '14:32';
+        'v14m32s' -> '14:32 on screen' (as the web app shows them)."""
         doc = ""
         rest = ref
         multi = re.match(r"^d(\d+)-(.+)$", ref)
@@ -87,6 +88,11 @@ class ExportInfo:
         flowing = re.match(r"^s(\d+)$", rest)
         if flowing:
             return f"{doc}part {flowing.group(1)}"
+        timed = re.match(r"^([tv])(?:(\d+)h)?(\d+)m(\d+)s(?:-\d+)?$", rest)
+        if timed:
+            kind, h, m, sec = timed.groups()
+            clock = f"{int(h)}:{int(m):02d}:{sec}" if h else f"{int(m)}:{sec}"
+            return f"{doc}{clock}{' on screen' if kind == 'v' else ''}"
         return ref
 
     def cite(self, refs: list[str] | None) -> str:

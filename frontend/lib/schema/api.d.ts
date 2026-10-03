@@ -283,6 +283,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sources/{source_id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Media
+         * @description The recording or image itself, inline and seekable (HTTP Range), for the player beside citations.
+         */
+        get: operations["get_media_api_v1_sources__source_id__media_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources/{source_id}/segments": {
         parameters: {
             query?: never;
@@ -518,6 +538,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Duration Seconds */
+            duration_seconds: number | null;
             /** Error */
             error: {
                 [key: string]: unknown;
@@ -1262,6 +1284,39 @@ export interface operations {
         };
     };
     get_file_api_v1_sources__source_id__file_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: {
+                hsn_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_media_api_v1_sources__source_id__media_get: {
         parameters: {
             query?: never;
             header?: never;

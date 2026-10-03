@@ -6,6 +6,8 @@ import { api } from "@/lib/api";
 
 export type GuideProgress = {
   stage: string | null;
+  /** While a recording or scan is being read: e.g. "Biology lecture: Transcribed 12:00 of 48:00". */
+  detail: string | null;
   topics: { id: string; title: string }[];
   readySections: string[];
   reviewedSections: string[];
@@ -15,6 +17,7 @@ export type GuideProgress = {
 
 const EMPTY: GuideProgress = {
   stage: null,
+  detail: null,
   topics: [],
   readySections: [],
   reviewedSections: [],
@@ -47,7 +50,7 @@ export function useGuideEvents(guideId: string, enabled: boolean, onChange: () =
     source.addEventListener("stage", (e) => {
       const data = parse(e);
       if (data.stage && data.stage !== "regenerate_section")
-        setProgress((p) => ({ ...p, stage: data.stage }));
+        setProgress((p) => ({ ...p, stage: data.stage, detail: data.detail ?? null }));
     });
     source.addEventListener("topics_detected", (e) => {
       const data = parse(e);

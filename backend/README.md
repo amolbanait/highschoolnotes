@@ -45,8 +45,8 @@ mislabelled examples) that the code must catch. No test calls the real model.
 
 | # | Stage | Where | Notes |
 |---|---|---|---|
-| 1 | Extract | `ingestion/pdf.py`, `docx.py`, `text.py` | Runs as an `extract` job on upload. Scanned PDFs are detected and refused with a clear message. |
-| 2 | Clean and segment | `ingestion/segment.py` | Drops running headers, footers and page numbers; ~500-token segments that never cross a page. Refs: `p12-s3` (PDF) or `s7` (flowing text). |
+| 1 | Extract | `ingestion/pdf.py`, `docx.py`, `text.py`, `image.py`, `media.py` | Runs as an `extract` job on upload. Scans, photos and recordings are covered under "Recordings, videos, scans and photos" below. |
+| 2 | Clean and segment | `ingestion/segment.py` | Drops running headers, footers and page numbers; ~500-token segments that never cross a page. Refs: `p12-s3` (PDF, scan, photo), `s7` (flowing text), `t14m32s` (speech from 14:32) or `v14m32s` (on screen from 14:32). |
 | 3 | Plan | `pipeline/stages/plan.py` | One model call: concepts with difficulty and prerequisites, vocabulary, verbatim facts and formulas, relationships, gaps. |
 | 4 | Sequence | `pipeline/stages/sequence.py` | Code: topological sort (prerequisites first, source order breaks ties, cycles broken with a warning); every citation and quote checked. |
 | 5 | Write sections | `pipeline/stages/write.py` | One call per concept, in parallel, with the outline and that concept's segments. Three levels only for hard concepts; Mermaid only where planned. |
@@ -69,6 +69,37 @@ escaped inside `<segment>` tags so it cannot break out of them.
 `schemas/study_guide.py`, streamed, with the system prompt cached, one retry with the
 validation error, server-side refusal fallbacks, and a per-guide token budget.
 
+## Recordings, videos, scans and photos
+
+| Input | How it is read |
+|---|---|
+| Scanned PDF pages, photos (PNG, JPEG, WebP) | `ingestion/vision.py`: Claude's vision (`HSN_VISION_MODEL`, default `claude-sonnet-5-5`) transcribes each page exactly, with formulas in LaTeX, tables in Markdown and `[illegible]` rather than guesses. Pictures are described, and the description is labelled `[Picture, described by AI]` so it is never quoted as the source's words. In a mixed PDF only the pages with no selectable text go to the model. The student sees "Check names, numbers and formulas against the original". |
+| Audio (MP3, M4A, WAV, OGG, FLAC, AAC) | `ingestion/media.py` + `ingestion/transcribe.py`: ffmpeg converts to 16 kHz mono, then faster-whisper (`HSN_WHISPER_MODEL`, default `small`) transcribes on the worker, with voice detection so silence doesn't turn into invented text. Recordings never leave the server and cost nothing per minute. |
+| Video (MP4, MOV, WebM, MKV) | The soundtrack as above, plus the screen: tiny thumbnails of the keyframes (at most one every 2 s) find where the picture changes and then holds still for 8 s or more; the last frame of each still stretch (the fullest version of a slide that builds up) is read by Claude's vision, up to `HSN_MAX_VIDEO_FRAMES` (60). Frames with nothing to learn from (a person talking) are dropped, and the same slide after a camera cut extends the earlier one. |
+
+Speech is cut into stretches of at most two minutes, so a citation lands near its moment, and each
+slide is its own segment. A slide's title becomes the section for the speech after it. The model is
+told which segments are an automatic transcript (may mishear names; prefer the on-screen spelling;
+skip small talk and logistics) and that "this will be on the test" is source emphasis, kept separate
+from its own judgement of what is likely to be tested.
+
+The web app shows recording citations as `14:32` and plays the recording from that moment
+(`GET /sources/{id}/media`, which serves byte ranges). Tokens spent reading images are stored on the
+source (`extraction_usage`), not counted against the guide's budget. While a recording is processed,
+waiting guides get `stage` events with `stage: "extract"` and a `detail` such as
+"Transcribed 12:00 of 48:00".
+
+Limits: 1 GB and 120 minutes per recording (`HSN_MAX_MEDIA_BYTES`, `HSN_MAX_MEDIA_MINUTES`).
+The worker downloads the Whisper model on first use (`HSN_WHISPER_CACHE_DIR`; Docker keeps it in the
+`models` volume). On a GPU worker set `HSN_WHISPER_DEVICE=cuda` and `HSN_WHISPER_COMPUTE_TYPE=float16`.
+`HSN_VISION_ENABLED=false` turns off reading images: scans are then refused, and videos use speech only.
+
+Not yet: speaker labels (Whisper doesn't tell speakers apart; a hosted service can implement the same
+`Transcriber` interface), video links such as YouTube, HEIC photos, and PowerPoint files.
+
+Try it on a file: `python -m app.cli lecture.mp4` prints transcription progress and the cost of
+reading slides, then makes the guide.
+
 ## API
 
 All under `/api/v1`; OpenAPI at `/api/v1/openapi.json`. Errors are always
@@ -83,6 +114,7 @@ Auth is an HTTP-only session cookie. Requests that change data must also send an
 | `GET /me`, `PATCH /me`, `DELETE /me` | Delete removes the account, files, guides and history. |
 | `POST /sources` | Multipart `file` (+ optional `title`), or JSON `{kind: "paste", title, text}`. 201 with `status: "extracting"`. |
 | `GET /sources`, `GET /sources/{id}`, `GET /sources/{id}/segments?page=&ref=`, `GET /sources/{id}/file`, `DELETE /sources/{id}` | Delete also removes guides built only from that source. |
+| `GET /sources/{id}/media` | Recordings and images only: the file inline, with HTTP Range, for the player beside a citation. |
 | `POST /guides` | `{source_ids, level}`. 202 `{guide_id, job_id}`. Can be called while sources are still extracting. |
 | `GET /guides?cursor=`, `GET /guides/{id}`, `DELETE /guides/{id}` | `content` is the guide document, partial while running. |
 | `GET /guides/{id}/refs/{ref}` | Resolve a citation to its segment text and location (the "view in source" panel). |
@@ -91,7 +123,7 @@ Auth is an HTTP-only session cookie. Requests that change data must also send an
 | `GET /guides/{id}/export?format=pdf\|docx\|md\|html` | Download a finished guide (409 while it is being made). Same order and labels as the web view, plus practice questions with a separate answer key and flashcards. |
 | `POST /guides/{id}/quiz-attempts`, `POST /guides/{id}/flashcard-reviews` | Multiple choice is graded; open answers return the model answer for self-checking. |
 
-Limits: 20 MB per upload, 60 pages or 40,000 words per guide, one running guide per user,
+Limits: 20 MB per document upload (1 GB and 120 minutes per recording), 60 pages or 40,000 words per guide, one running guide per user,
 10 guides per user per hour. All are settings (`app/core/config.py`, env prefix `HSN_`).
 
 ## Where this differs from the design doc

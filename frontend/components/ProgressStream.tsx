@@ -14,13 +14,14 @@ export function ProgressStream({
     0,
     STAGES.findIndex((s) => s.key === stage),
   );
-  const { topics, readySections, reviewedSections } = progress;
+  const { topics, readySections, reviewedSections, detail } = progress;
 
   return (
     <section aria-live="polite" className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-6">
       <h2 className="text-lg font-semibold text-slate-900">Making your study guide</h2>
       <p className="mt-1 text-sm text-slate-600">
-        This usually takes a few minutes. You can leave this page and come back; it keeps going.
+        This usually takes a few minutes, longer for a long recording. You can leave this page and come back;
+        it keeps going.
       </p>
       <ol className="mt-5 space-y-2.5">
         {STAGES.slice(1).map((s, i) => {
@@ -50,6 +51,9 @@ export function ProgressStream({
                 }
               >
                 {s.label}
+                {s.key === "extract" && state === "active" && detail && (
+                  <span className="block text-xs font-normal text-slate-500">{detail}</span>
+                )}
                 {s.key === "write_sections" && state === "active" && topics.length > 0 && (
                   <span className="text-slate-500">
                     {" "}

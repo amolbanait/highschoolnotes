@@ -7,6 +7,7 @@ A job whose worker died is reclaimed once its lock expires, and resumes from its
 import copy
 import logging
 import socket
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -25,9 +26,10 @@ from app.db.models import (
     SourceSegment,
     StudyGuide,
 )
-from app.ingestion.base import ExtractionError
-from app.ingestion.registry import get_extractor
+from app.ingestion.base import ExtractionError, ExtractTools
+from app.ingestion.registry import MEDIA_KINDS, get_extractor, get_file_extractor
 from app.ingestion.segment import segment, word_count
+from app.ingestion.transcribe import Transcriber
 from app.llm.client import LLM, LLMError, TokenMeter
 from app.pipeline import orchestrator
 from app.pipeline.orchestrator import PipelineContext, PipelineError
@@ -93,6 +95,8 @@ def run_job(
     storage: Storage,
     settings: Settings,
     reviewer: LLM | None = None,
+    vision: LLM | None = None,
+    transcriber: Transcriber | None = None,
 ) -> None:
     with Session_() as db:
         job = db.get(GenerationJob, job_id)
@@ -103,7 +107,7 @@ def run_job(
             return
         try:
             if job.kind == "extract":
-                run_extract(db, job, storage, settings)
+                run_extract(db, job, storage, settings, vision, transcriber)
             elif job.kind == "generate":
                 run_generate(db, job, llm, settings, reviewer)
             elif job.kind == "regenerate_section":
@@ -168,14 +172,43 @@ def _finish(db: Session, job: GenerationJob) -> None:
 # ---------- extract ----------
 
 
-def run_extract(db: Session, job: GenerationJob, storage: Storage, settings: Settings) -> None:
+def run_extract(
+    db: Session,
+    job: GenerationJob,
+    storage: Storage,
+    settings: Settings,
+    vision: LLM | None = None,
+    transcriber: Transcriber | None = None,
+) -> None:
     source = db.get(Source, job.source_id)
     if source is None:
         _finish(db, job)
         return
+    last_event = 0.0
+
+    def progress(message: str) -> None:
+        """Keeps the job's lock alive through a long recording, and tells waiting guides how far along it is."""
+        nonlocal last_event
+        heartbeat(db, job, settings)
+        if time.monotonic() - last_event >= 10:
+            last_event = time.monotonic()
+            waiting = db.scalars(
+                select(StudyGuide.id)
+                .join(GuideSource, GuideSource.guide_id == StudyGuide.id)
+                .where(GuideSource.source_id == source.id, StudyGuide.status == "queued")
+            ).all()
+            for guide_id in waiting:
+                add_event(db, guide_id, "stage", {"stage": "extract", "detail": f"{source.title}: {message}"})
+        db.commit()
+
+    tools = ExtractTools(settings=settings, vision=vision, transcriber=transcriber, progress=progress)
     try:
-        data = storage.get(source.storage_key)
-        result = get_extractor(source.kind).extract(data)
+        if source.kind in MEDIA_KINDS:
+            with storage.local_path(source.storage_key) as path:
+                result = get_file_extractor(source.kind, tools).extract_file(path)
+        else:
+            data = storage.get(source.storage_key)
+            result = get_extractor(source.kind, tools).extract(data)
         if result.page_count and result.page_count > settings.max_pages:
             raise ExtractionError(
                 "source_too_long",
@@ -185,7 +218,12 @@ def run_extract(db: Session, job: GenerationJob, storage: Storage, settings: Set
         segments = segment(result)
         words = sum(word_count(s.text) for s in segments)
         if words == 0:
-            raise ExtractionError("no_text", "No readable text was found in this material.")
+            message = (
+                "No speech or on-screen text was found in this recording."
+                if result.timed
+                else "No readable text was found in this material."
+            )
+            raise ExtractionError("no_text", message)
         if words > settings.max_words:
             raise ExtractionError(
                 "source_too_long",
@@ -193,6 +231,7 @@ def run_extract(db: Session, job: GenerationJob, storage: Storage, settings: Set
                 "split it into parts and upload each one.",
             )
     except ExtractionError as exc:
+        db.rollback()
         _fail(db, job, exc.code, exc.message)
         return
 
@@ -210,6 +249,8 @@ def run_extract(db: Session, job: GenerationJob, storage: Storage, settings: Set
             )
         )
     source.page_count = result.page_count
+    source.duration_seconds = result.duration
+    source.extraction_usage = tools.usage.as_dict() if tools.usage else None
     source.word_count = words
     source.warnings = result.warnings
     source.status = "ready"
@@ -239,6 +280,7 @@ def guide_segments(db: Session, guide_id: uuid.UUID) -> tuple[list[dict], list[S
                     "ref": guide_ref(position, seg.ref),
                     "text": seg.text,
                     "heading_path": seg.heading_path,
+                    "locator": seg.locator,
                     "source_id": str(source.id),
                 }
             )
@@ -326,6 +368,19 @@ def write_quality_reports(db: Session, guide_id: uuid.UUID, reports: list[dict])
         )
 
 
+# Notices from reading the material that the student should see beside the guide.
+_SOURCE_NOTICES = ("ocr_pages", "scanned_pages", "no_audio", "screen_skipped")
+
+
+def source_notices(sources: list[Source]) -> list[str]:
+    notices = []
+    for source in sources:
+        for w in source.warnings or []:
+            if isinstance(w, dict) and w.get("code") in _SOURCE_NOTICES and w.get("message"):
+                notices.append(f"{source.title}: {w['message']}" if len(sources) > 1 else w["message"])
+    return notices
+
+
 def run_generate(
     db: Session, job: GenerationJob, llm: LLM, settings: Settings, reviewer: LLM | None = None
 ) -> None:
@@ -352,6 +407,7 @@ def run_generate(
     db.commit()
     ctx = _context(db, job, guide, segments, llm, settings, reviewer=reviewer)
     content = orchestrator.run(ctx)
+    content["warnings"] = source_notices(sources) + content.get("warnings", [])
     guide.content = content
     guide.status = "ready"
     guide.quality_score = orchestrator.quality_score(ctx.state)

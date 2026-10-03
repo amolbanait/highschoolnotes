@@ -3,9 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 
-# Pango and fonts for WeasyPrint (PDF export).
+# Pango and fonts for WeasyPrint (PDF export); ffmpeg for audio and video.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
@@ -15,7 +15,7 @@ RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('pyproject.tom
 COPY alembic.ini ./
 COPY app ./app
 
-RUN useradd --create-home appuser && mkdir -p /data/files && chown appuser /data/files
+RUN useradd --create-home appuser && mkdir -p /data/files /data/models && chown appuser /data/files /data/models
 USER appuser
 
 EXPOSE 8000

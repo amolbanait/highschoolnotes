@@ -13,8 +13,10 @@ import time
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.ingestion.registry import detect_kind, get_extractor
+from app.ingestion.base import ExtractTools
+from app.ingestion.registry import MEDIA_KINDS, detect_kind, get_extractor, get_file_extractor
 from app.ingestion.segment import segment, word_count
+from app.ingestion.transcribe import WhisperTranscriber
 from app.llm.client import AnthropicLLM, TokenMeter
 from app.pipeline import orchestrator
 from app.schemas.study_guide import LEVELS
@@ -49,13 +51,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     settings = get_settings()
-    data = args.file.read_bytes()
-    kind = detect_kind(args.file.name, data)
-    segments = segment(get_extractor(kind).extract(data))
+    started = time.monotonic()
+    with args.file.open("rb") as f:
+        kind = detect_kind(args.file.name, f.read(64))
+    tools = ExtractTools(
+        settings=settings,
+        vision=AnthropicLLM(settings, model=settings.vision_model),
+        transcriber=WhisperTranscriber(settings),
+        progress=lambda message: print(f"[{time.monotonic() - started:6.1f}s] {message}", file=sys.stderr),
+    )
+    if kind in MEDIA_KINDS:
+        result = get_file_extractor(kind, tools).extract_file(args.file)
+    else:
+        result = get_extractor(kind, tools).extract(args.file.read_bytes())
+    segments = segment(result)
     words = sum(word_count(s.text) for s in segments)
     print(f"{args.file.name}: {len(segments)} segments, {words:,} words", file=sys.stderr)
-
-    started = time.monotonic()
+    if tools.usage:
+        cost = estimate_cost(settings.vision_model, tools.usage.as_dict())
+        print(f"Reading images: {tools.usage.as_dict()} (about ${cost or 0:.3f})", file=sys.stderr)
 
     def emit(type_: str, payload: dict) -> None:
         detail = payload.get("stage") or payload.get("section_id") or ""
@@ -64,7 +78,10 @@ def main(argv: list[str] | None = None) -> int:
     llm = AnthropicLLM(settings)
     reviewer = AnthropicLLM(settings, model=settings.reviewer_model)
     ctx = orchestrator.PipelineContext(
-        segments=[{"ref": s.ref, "text": s.text, "heading_path": s.heading_path} for s in segments],
+        segments=[
+            {"ref": s.ref, "text": s.text, "heading_path": s.heading_path, "locator": s.locator}
+            for s in segments
+        ],
         level=args.level,
         llm=llm,
         meter=TokenMeter(budget=settings.guide_token_budget),

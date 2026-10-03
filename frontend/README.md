@@ -18,7 +18,13 @@ npm run dev          # http://localhost:3000
 The browser only talks to this app. `next.config.ts` proxies `/api/v1/*` to `API_URL`
 (default `http://localhost:8000`), so the session cookie is first-party and no CORS is needed.
 Next's own gzip is off because it holds back the progress stream; compress at your reverse
-proxy instead and leave `text/event-stream` uncompressed.
+proxy instead and leave `text/event-stream` uncompressed. Next holds a proxied request body in
+memory (up to `proxyClientMaxBodySize`, raised to 1.1 GB for recordings), so in production route
+`/api/v1/*` straight to the API at the reverse proxy.
+
+Uploads take documents and photos up to 20 MB and recordings or videos up to 1 GB. A citation
+from a recording reads `14:32` (or `14:32 on screen` for a slide), and opening it plays the
+recording from that moment beside the transcript.
 
 Every finished guide has a **Download or print** menu: PDF, Word, Markdown and a standalone web page
 come from the API (`/api/v1/guides/{id}/export`), and "Printable view" opens `/guides/[id]/print`.

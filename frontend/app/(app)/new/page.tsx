@@ -7,7 +7,7 @@ import { useAuth } from "@/components/auth";
 import { formatBytes, UploadDropzone } from "@/components/UploadDropzone";
 import { Button, ErrorMessage, Field, inputClass } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
-import { formatDate, LEVELS } from "@/lib/labels";
+import { formatClock, formatDate, LEVELS } from "@/lib/labels";
 import type { Level, Source } from "@/lib/types";
 
 const MAX_SOURCES = 5;
@@ -59,7 +59,8 @@ export default function NewGuidePage() {
     try {
       if (tab === "upload") {
         for (const [i, f] of files.entries()) {
-          setStatus(files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : "Uploading…");
+          const big = f.size > 50 * 1024 * 1024 ? " This can take a few minutes." : "";
+          setStatus((files.length > 1 ? `Uploading ${i + 1} of ${files.length}…` : "Uploading…") + big);
           ids.push((await api.uploadSource(f)).id);
         }
       } else if (pasteText.trim()) {
@@ -156,8 +157,12 @@ export default function NewGuidePage() {
                   />
                   <span className="flex-1 truncate">{s.title}</span>
                   <span className="text-xs text-slate-400">
-                    {s.word_count ? `${s.word_count.toLocaleString()} words` : formatBytes(s.byte_size)} ·{" "}
-                    {formatDate(s.created_at)}
+                    {s.duration_seconds
+                      ? `${formatClock(s.duration_seconds)} long`
+                      : s.word_count
+                        ? `${s.word_count.toLocaleString()} words`
+                        : formatBytes(s.byte_size)}{" "}
+                    · {formatDate(s.created_at)}
                   </span>
                 </label>
               </li>

@@ -40,3 +40,68 @@ def make_docx() -> bytes:
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def make_png(size: tuple[int, int] = (400, 300), colour: str = "white") -> bytes:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def make_scanned_pdf(text_pages: list[str | None]) -> bytes:
+    """Per page: real text, or None for a page that is only a picture (a scan)."""
+    doc = pymupdf.open()
+    picture = make_png((600, 800), "#f4f1e8")
+    for text in text_pages:
+        page = doc.new_page()
+        if text is None:
+            page.insert_image(page.rect, stream=picture)
+        else:
+            page.insert_textbox(pymupdf.Rect(72, 72, 540, 700), text, fontsize=11)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def make_video(path, scenes: list[tuple[str, int]], audio: bool = True) -> None:
+    """A small MP4: one solid colour per scene (colour, seconds), with a tone as the soundtrack."""
+    import subprocess
+
+    inputs: list[str] = []
+    for colour, seconds in scenes:
+        inputs += ["-f", "lavfi", "-i", f"color=c={colour}:s=320x180:r=10:d={seconds}"]
+    total = sum(s for _, s in scenes)
+    concat = "".join(f"[{i}:v]" for i in range(len(scenes))) + f"concat=n={len(scenes)}:v=1:a=0[v]"
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", *inputs]
+    if audio:
+        cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={total}"]
+    cmd += ["-filter_complex", concat, "-map", "[v]"]
+    if audio:
+        cmd += ["-map", f"{len(scenes)}:a", "-c:a", "aac"]
+    cmd += ["-c:v", "libx264", "-g", "20", "-pix_fmt", "yuv420p", str(path)]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def make_audio(path, seconds: int) -> None:
+    import subprocess
+
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=300:duration={seconds}",
+            "-c:a",
+            "libmp3lame",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )

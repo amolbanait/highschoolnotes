@@ -52,6 +52,7 @@ class SourceOut(BaseModel):
     byte_size: int
     status: str
     page_count: int | None
+    duration_seconds: float | None
     word_count: int | None
     warnings: list[Any]
     error: dict[str, Any] | None

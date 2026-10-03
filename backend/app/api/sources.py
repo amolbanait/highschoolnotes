@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 from fastapi.responses import Response as RawResponse
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select
@@ -11,11 +12,11 @@ from starlette.datastructures import UploadFile
 
 from app.api.deps import current_user, own_source
 from app.core.config import get_settings
-from app.core.errors import AppError
+from app.core.errors import AppError, not_found
 from app.db.models import GuideSource, Source, SourceSegment, StudyGuide, User
 from app.db.session import get_db
 from app.ingestion.base import ExtractionError
-from app.ingestion.registry import MIME_TYPES, detect_kind
+from app.ingestion.registry import MEDIA_KINDS, detect_kind, extension, mime_for
 from app.pipeline import jobs
 from app.schemas.api import PasteIn, SegmentOut, SourceOut
 from app.storage.files import get_storage
@@ -33,18 +34,25 @@ async def create_source(
     settings = get_settings()
     content_type = request.headers.get("content-type", "")
     declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > settings.max_upload_bytes + 64 * 1024:
-        raise AppError(
-            413, "source_too_large", f"Files can be up to {settings.max_upload_bytes // (1024 * 1024)} MB."
-        )
+    largest = max(settings.max_upload_bytes, settings.max_media_bytes)
+    if declared.isdigit() and int(declared) > largest + 64 * 1024:
+        raise AppError(413, "source_too_large", f"Files can be up to {_mb(largest)}.")
     if content_type.startswith("multipart/form-data"):
         form = await request.form(max_files=1, max_fields=5)
         upload = form.get("file")
         if not isinstance(upload, UploadFile):
             raise AppError(400, "file_missing", "Choose a file to upload.")
-        data = await upload.read(settings.max_upload_bytes + 1)
         filename = (upload.filename or "upload").rsplit("/", 1)[-1][:300]
         title = str(form.get("title") or filename.rsplit(".", 1)[0])[:300]
+        try:
+            kind = detect_kind(filename, await upload.read(64))
+        except ExtractionError as exc:
+            raise AppError(415, exc.code, exc.message, exc.details) from exc
+        await upload.seek(0)
+        if kind in MEDIA_KINDS:
+            # Recordings can be hundreds of megabytes: copy to storage without reading into memory.
+            return await run_in_threadpool(_store_media, db, user, upload, kind, filename, title)
+        data = await upload.read(settings.max_upload_bytes + 1)
     elif content_type.startswith("application/json"):
         try:
             body = PasteIn.model_validate_json(await request.body())
@@ -56,46 +64,90 @@ async def create_source(
         data = body.text.encode("utf-8")
         filename = None
         title = body.title
+        kind = "paste"
     else:
         raise AppError(
             415, "unsupported_media_type", "Send a file as multipart/form-data or pasted text as JSON."
         )
 
-    return await run_in_threadpool(_store_source, db, user, data, filename, title)
+    return await run_in_threadpool(_store_source, db, user, data, kind, filename, title)
 
 
-def _store_source(db: Session, user: User, data: bytes, filename: str | None, title: str) -> Source:
-    settings = get_settings()
-    if len(data) > settings.max_upload_bytes:
-        raise AppError(
-            413, "source_too_large", f"Files can be up to {settings.max_upload_bytes // (1024 * 1024)} MB."
-        )
-    if not data.strip():
-        raise AppError(400, "empty_source", "This material is empty.")
-    try:
-        kind = detect_kind(filename, data) if filename else "paste"
-    except ExtractionError as exc:
-        raise AppError(415, exc.code, exc.message, exc.details) from exc
+def _mb(n: int) -> str:
+    return f"{n // (1024 * 1024 * 1024)} GB" if n >= 1024**3 else f"{n // (1024 * 1024)} MB"
 
-    sha = hashlib.sha256(data).hexdigest()
+
+def _new_source(
+    db: Session, user: User, kind: str, filename: str | None, title: str, size: int, sha: str
+) -> Source:
     source = Source(
         user_id=user.id,
         kind=kind,
         title=title.strip() or "Untitled",
         filename=filename,
-        mime=MIME_TYPES[kind],
-        byte_size=len(data),
+        mime=mime_for(kind, filename),
+        byte_size=size,
         sha256=sha,
         status="extracting",
     )
     db.add(source)
     db.flush()
-    source.storage_key = f"{user.id}/{source.id}{_EXTENSIONS[kind]}"
-    get_storage().put(source.storage_key, data)
+    return source
 
+
+def _storage_key(user: User, source: Source, kind: str, filename: str | None) -> str:
+    ext = extension(filename or "") if kind in ("image", *MEDIA_KINDS) else _EXTENSIONS[kind]
+    return f"{user.id}/{source.id}{ext}"
+
+
+def _store_source(
+    db: Session, user: User, data: bytes, kind: str, filename: str | None, title: str
+) -> Source:
+    settings = get_settings()
+    if len(data) > settings.max_upload_bytes:
+        raise AppError(413, "source_too_large", f"Files can be up to {_mb(settings.max_upload_bytes)}.")
+    if not data.strip():
+        raise AppError(400, "empty_source", "This material is empty.")
+
+    sha = hashlib.sha256(data).hexdigest()
+    source = _new_source(db, user, kind, filename, title, len(data), sha)
+    source.storage_key = _storage_key(user, source, kind, filename)
+    get_storage().put(source.storage_key, data)
+    _extract_or_reuse(db, user, source)
+    db.commit()
+    return source
+
+
+def _store_media(db: Session, user: User, upload: UploadFile, kind: str, filename: str, title: str) -> Source:
+    settings = get_settings()
+    storage = get_storage()
+    source = _new_source(db, user, kind, filename, title, 0, "")
+    source.storage_key = _storage_key(user, source, kind, filename)
+    stored = storage.put_stream(source.storage_key, upload.file, settings.max_media_bytes)
+    if stored is None:
+        db.rollback()
+        raise AppError(
+            413, "source_too_large", f"Recordings and videos can be up to {_mb(settings.max_media_bytes)}."
+        )
+    source.byte_size, source.sha256 = stored
+    if source.byte_size == 0:
+        storage.delete(source.storage_key)
+        db.rollback()
+        raise AppError(400, "empty_source", "This material is empty.")
+    _extract_or_reuse(db, user, source)
+    db.commit()
+    return source
+
+
+def _extract_or_reuse(db: Session, user: User, source: Source) -> None:
     previous = db.scalar(
         select(Source)
-        .where(Source.user_id == user.id, Source.sha256 == sha, Source.kind == kind, Source.status == "ready")
+        .where(
+            Source.user_id == user.id,
+            Source.sha256 == source.sha256,
+            Source.kind == source.kind,
+            Source.status == "ready",
+        )
         .where(Source.id != source.id)
         .order_by(Source.created_at.desc())
     )
@@ -103,8 +155,6 @@ def _store_source(db: Session, user: User, data: bytes, filename: str | None, ti
         _copy_extraction(db, previous, source)
     else:
         jobs.enqueue(db, "extract", source_id=source.id)
-    db.commit()
-    return source
 
 
 def _copy_extraction(db: Session, previous: Source, source: Source) -> None:
@@ -122,6 +172,7 @@ def _copy_extraction(db: Session, previous: Source, source: Source) -> None:
             )
         )
     source.page_count = previous.page_count
+    source.duration_seconds = previous.duration_seconds
     source.word_count = previous.word_count
     source.warnings = previous.warnings
     source.status = "ready"
@@ -172,6 +223,28 @@ def get_file(
         media_type=source.mime or "application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{safe}"'},
     )
+
+
+@router.get("/sources/{source_id}/media")
+def get_media(
+    source_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> FileResponse:
+    """The recording or image itself, inline and seekable (HTTP Range), for the player beside citations."""
+    source = own_source(db, user, source_id)
+    if source.kind not in ("image", *MEDIA_KINDS) or not source.storage_key:
+        raise not_found("media")
+    with get_storage().local_path(source.storage_key) as path:
+        if not path.exists():
+            raise not_found("media")
+        return FileResponse(
+            path,
+            media_type=source.mime or "application/octet-stream",
+            headers={
+                "Content-Disposition": "inline",
+                "Cache-Control": "private, max-age=3600",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
 
 @router.delete("/sources/{source_id}", status_code=204)

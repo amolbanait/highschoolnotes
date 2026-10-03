@@ -53,9 +53,13 @@ services:
     env_file:
       - path: .env
         required: false
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # The speech-to-text model is downloaded on first use and kept here.
+      HSN_WHISPER_CACHE_DIR: /data/models
     volumes:
       - files:/data/files
+      - models:/data/models
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -73,3 +77,4 @@ services:
 volumes:
   pgdata:
   files:
+  models:
