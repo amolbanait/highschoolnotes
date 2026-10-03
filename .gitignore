@@ -8,3 +8,4 @@ backend/data/
 guide.json
 node_modules/
 .next/
+*.egg-info/

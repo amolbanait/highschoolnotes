@@ -1,7 +1,7 @@
 # Local development: Postgres, the API and one worker.
 #   cp .env.example .env   # then set ANTHROPIC_API_KEY
 #   docker compose up --build
-# API: http://localhost:8000/docs   (the web app joins this file in the next build step)
+# Web app: http://localhost:3000   API docs: http://localhost:8000/docs
 
 services:
   postgres:
@@ -59,6 +59,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+
+  web:
+    build: ./frontend
+    environment:
+      # Next proxies /api/v1/* here, so the browser only talks to the web app's origin.
+      API_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
 
 volumes:
   pgdata:

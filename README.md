@@ -6,10 +6,11 @@ The goal is teaching, not summarizing: logically ordered concepts, simple explan
 
 - [docs/design.md](docs/design.md): the MVP design.
 - [backend/](backend/README.md): API, worker and note pipeline.
+- [frontend/](frontend/README.md): the student web app.
 
 ## Run locally
 
 ```sh
 cp .env.example .env        # set ANTHROPIC_API_KEY
-docker compose up --build   # API docs at http://localhost:8000/docs
+docker compose up --build   # app at http://localhost:3000, API docs at http://localhost:8000/docs
 ```

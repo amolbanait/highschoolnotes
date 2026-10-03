@@ -39,3 +39,26 @@ jobs:
       - run: ruff format --check .
       - run: alembic upgrade head && alembic check
       - run: pytest
+      - name: Web app schema files are up to date
+        run: python -m app.export_schemas ../frontend/lib/schema && git diff --exit-code ../frontend/lib/schema
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Generated types match the schema files
+        run: npm run gen:types && git diff --exit-code lib/schema
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
