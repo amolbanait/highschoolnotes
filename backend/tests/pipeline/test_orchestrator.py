@@ -95,7 +95,7 @@ def test_regenerate_one_section(sample_text):
     orchestrator.run(_ctx(sample_text, FakeLLM(), state=state))
     llm = FakeLLM()
     content = orchestrator.regenerate_section(_ctx(sample_text, llm, state=state), "c2", "simpler")
-    assert llm.calls == ["write"]
+    assert llm.calls == ["write", "review"]
     assert content["concepts"][1]["id"] == "c2"
 
 

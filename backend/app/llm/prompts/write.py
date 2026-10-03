@@ -18,7 +18,12 @@ DIAGRAM_HINT = {
 
 
 def build(
-    concept: dict, outline: list[dict], segments: list[dict], level: str, instruction: str | None = None
+    concept: dict,
+    outline: list[dict],
+    segments: list[dict],
+    level: str,
+    instruction: str | None = None,
+    feedback: str | None = None,
 ) -> tuple[str, str]:
     diagram = concept.get("diagram", "none")
     parts = [
@@ -59,4 +64,6 @@ re-teaching them.""",
         parts.append("- diagram: null.")
     if instruction:
         parts.append(f"The student asked for this section to be rewritten with this request: {instruction}")
+    if feedback:
+        parts.append(feedback)
     return system_prompt(ROLE, level), "\n\n".join(parts)

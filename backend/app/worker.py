@@ -14,7 +14,7 @@ from app.storage.files import Storage, get_storage
 log = logging.getLogger("worker")
 
 
-def run_once(llm: LLM, storage: Storage, settings: Settings) -> bool:
+def run_once(llm: LLM, storage: Storage, settings: Settings, reviewer: LLM | None = None) -> bool:
     """Claim and run one job. Returns False when the queue is empty."""
     Session_ = get_sessionmaker()
     with Session_() as db:
@@ -24,7 +24,7 @@ def run_once(llm: LLM, storage: Storage, settings: Settings) -> bool:
         job_id, kind = job.id, job.kind
     log.info("running job %s (%s)", job_id, kind)
     started = time.monotonic()
-    jobs.run_job(Session_, job_id, llm, storage, settings)
+    jobs.run_job(Session_, job_id, llm, storage, settings, reviewer)
     log.info("job %s finished in %.1fs", job_id, time.monotonic() - started)
     return True
 
@@ -33,6 +33,7 @@ def main() -> None:
     configure_logging()
     settings = get_settings()
     llm = AnthropicLLM(settings)
+    reviewer = AnthropicLLM(settings, model=settings.reviewer_model)
     storage = get_storage()
     stopping = False
 
@@ -43,10 +44,15 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    log.info("worker %s started (model %s)", jobs.WORKER_ID, settings.writer_model)
+    log.info(
+        "worker %s started (writer %s, reviewer %s)",
+        jobs.WORKER_ID,
+        settings.writer_model,
+        settings.reviewer_model,
+    )
     while not stopping:
         try:
-            if not run_once(llm, storage, settings):
+            if not run_once(llm, storage, settings, reviewer):
                 time.sleep(settings.worker_poll_seconds)
         except Exception:
             log.exception("worker loop error")

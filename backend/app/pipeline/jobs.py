@@ -16,7 +16,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import Settings
-from app.db.models import GenerationJob, GuideEvent, GuideSource, Source, SourceSegment, StudyGuide
+from app.db.models import (
+    GenerationJob,
+    GuideEvent,
+    GuideSource,
+    QualityReport,
+    Source,
+    SourceSegment,
+    StudyGuide,
+)
 from app.ingestion.base import ExtractionError
 from app.ingestion.registry import get_extractor
 from app.ingestion.segment import segment, word_count
@@ -79,7 +87,12 @@ def heartbeat(db: Session, job: GenerationJob, settings: Settings) -> None:
 
 
 def run_job(
-    Session_: sessionmaker[Session], job_id: uuid.UUID, llm: LLM, storage: Storage, settings: Settings
+    Session_: sessionmaker[Session],
+    job_id: uuid.UUID,
+    llm: LLM,
+    storage: Storage,
+    settings: Settings,
+    reviewer: LLM | None = None,
 ) -> None:
     with Session_() as db:
         job = db.get(GenerationJob, job_id)
@@ -92,9 +105,9 @@ def run_job(
             if job.kind == "extract":
                 run_extract(db, job, storage, settings)
             elif job.kind == "generate":
-                run_generate(db, job, llm, settings)
+                run_generate(db, job, llm, settings, reviewer)
             elif job.kind == "regenerate_section":
-                run_regenerate(db, job, llm, settings)
+                run_regenerate(db, job, llm, settings, reviewer)
             else:
                 _fail(db, job, "unknown_job", f"Unknown job kind {job.kind}")
         except LLMError as exc:
@@ -252,6 +265,7 @@ def _context(
     llm: LLM,
     settings: Settings,
     event_job: GenerationJob | None = None,
+    reviewer: LLM | None = None,
 ):
     """`job` holds the pipeline state; events name `event_job` (the job actually running) if given."""
     meter = TokenMeter.from_dict(settings.guide_token_budget, guide.token_usage)
@@ -266,7 +280,12 @@ def _context(
         if state.get("sequence"):
             guide.title = state["sequence"]["title"][:300]
         guide.token_usage = meter.as_dict()
-        guide.models = {"writer": llm.model, "prompt_version": _prompt_version()}
+        guide.quality_score = orchestrator.quality_score(state)
+        guide.models = {
+            "writer": llm.model,
+            "reviewer": (reviewer or llm).model,
+            "prompt_version": _prompt_version(),
+        }
         heartbeat(db, job, settings)
         db.commit()
 
@@ -283,6 +302,7 @@ def _context(
         state=state,
         save=save,
         emit=emit,
+        reviewer=reviewer,
     )
 
 
@@ -292,7 +312,23 @@ def _prompt_version() -> str:
     return PROMPT_VERSION
 
 
-def run_generate(db: Session, job: GenerationJob, llm: LLM, settings: Settings) -> None:
+def write_quality_reports(db: Session, guide_id: uuid.UUID, reports: list[dict]) -> None:
+    """One quality_reports row per reviewed section: the checks, every review attempt, the outcome."""
+    for report in reports:
+        db.add(
+            QualityReport(
+                guide_id=guide_id,
+                section_id=report["section_id"],
+                score=report.get("score"),
+                action=report["action"],
+                checks={k: v for k, v in report.items() if k not in ("section_id", "score", "action")},
+            )
+        )
+
+
+def run_generate(
+    db: Session, job: GenerationJob, llm: LLM, settings: Settings, reviewer: LLM | None = None
+) -> None:
     guide = db.get(StudyGuide, job.guide_id)
     if guide is None:
         _finish(db, job)
@@ -314,10 +350,12 @@ def run_generate(db: Session, job: GenerationJob, llm: LLM, settings: Settings) 
 
     guide.status = "running"
     db.commit()
-    ctx = _context(db, job, guide, segments, llm, settings)
+    ctx = _context(db, job, guide, segments, llm, settings, reviewer=reviewer)
     content = orchestrator.run(ctx)
     guide.content = content
     guide.status = "ready"
+    guide.quality_score = orchestrator.quality_score(ctx.state)
+    write_quality_reports(db, guide.id, list(ctx.state.get("reviews", {}).values()))
     guide.token_usage = ctx.meter.as_dict()
     add_event(
         db,
@@ -326,13 +364,16 @@ def run_generate(db: Session, job: GenerationJob, llm: LLM, settings: Settings) 
         {
             "job_id": str(job.id),
             "concepts": len(content["concepts"]),
+            "quality_score": guide.quality_score,
             "token_usage": ctx.meter.usage.as_dict(),
         },
     )
     _finish(db, job)
 
 
-def run_regenerate(db: Session, job: GenerationJob, llm: LLM, settings: Settings) -> None:
+def run_regenerate(
+    db: Session, job: GenerationJob, llm: LLM, settings: Settings, reviewer: LLM | None = None
+) -> None:
     guide = db.get(StudyGuide, job.guide_id)
     source_job = db.scalars(
         select(GenerationJob)
@@ -346,9 +387,14 @@ def run_regenerate(db: Session, job: GenerationJob, llm: LLM, settings: Settings
     if guide is None or source_job is None:
         raise PipelineError("guide_not_ready", "This guide is not finished yet.")
     segments, _ = guide_segments(db, guide.id)
-    ctx = _context(db, source_job, guide, segments, llm, settings, event_job=job)
-    content = orchestrator.regenerate_section(ctx, job.params["section_id"], job.params.get("instruction"))
+    ctx = _context(db, source_job, guide, segments, llm, settings, event_job=job, reviewer=reviewer)
+    section_id = job.params["section_id"]
+    content = orchestrator.regenerate_section(ctx, section_id, job.params.get("instruction"))
     guide.content = content
+    guide.quality_score = orchestrator.quality_score(ctx.state)
+    report = ctx.state.get("reviews", {}).get(section_id)
+    if report and settings.review_enabled:
+        write_quality_reports(db, guide.id, [{**report, "trigger": "student_rewrite"}])
     guide.token_usage = ctx.meter.as_dict()
     _finish(db, job)
 

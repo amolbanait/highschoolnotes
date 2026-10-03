@@ -66,3 +66,22 @@ body {
 .prose-inline > div {
   display: inline;
 }
+
+/* Printing (the printable view, or Print from any guide page). */
+@media print {
+  @page {
+    margin: 0.6in;
+  }
+  body {
+    background: white;
+    font-size: 11pt;
+  }
+  main {
+    max-width: none;
+    padding: 0;
+  }
+  details,
+  button {
+    display: none !important;
+  }
+}

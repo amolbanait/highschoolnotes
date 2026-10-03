@@ -120,9 +120,11 @@ class LLM(Protocol):
 
 
 class AnthropicLLM:
-    def __init__(self, settings: Settings, client: anthropic.Anthropic | None = None):
+    def __init__(
+        self, settings: Settings, client: anthropic.Anthropic | None = None, model: str | None = None
+    ):
         self.settings = settings
-        self.model = settings.writer_model
+        self.model = model or settings.writer_model
         self.client = client or anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=3)
 
     def generate(

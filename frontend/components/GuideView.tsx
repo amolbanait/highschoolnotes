@@ -12,9 +12,12 @@ type TocItem = { id: string; label: string; child?: boolean };
 export function GuideView({
   content,
   conceptActions,
+  printable = false,
 }: {
   content: StudyGuideContent;
   conceptActions?: (concept: Concept) => React.ReactNode;
+  /** One column, no contents menu, everything expanded: the printable study guide. */
+  printable?: boolean;
 }) {
   const concepts = content.concepts ?? [];
   const vocabulary = content.vocabulary ?? [];
@@ -45,8 +48,8 @@ export function GuideView({
   ];
 
   return (
-    <div className="lg:grid lg:grid-cols-[14rem_1fr] lg:gap-10">
-      <nav aria-label="Contents" className="hidden lg:block">
+    <div className={printable ? "" : "lg:grid lg:grid-cols-[14rem_1fr] lg:gap-10"}>
+      <nav aria-label="Contents" className={printable ? "hidden" : "hidden lg:block print:hidden"}>
         <div className="sticky top-24 max-h-[calc(100vh-8rem)] overflow-y-auto">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Contents</p>
           <ul className="space-y-1 text-sm">
@@ -130,6 +133,7 @@ export function GuideView({
             number={i + 1}
             prerequisiteTitles={c.prerequisites.map(titleOf)}
             actions={conceptActions?.(c)}
+            printable={printable}
           />
         ))}
 
@@ -237,9 +241,9 @@ function Card({ id, title, children }: { id: string; title: string; children: Re
   return (
     <section
       id={id}
-      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8"
+      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 print:rounded-none print:border-0 print:p-0 print:shadow-none"
     >
-      <h2 className="mb-4 text-xl font-bold text-slate-900">{title}</h2>
+      <h2 className="mb-4 text-xl font-bold text-slate-900 print:break-after-avoid">{title}</h2>
       {children}
     </section>
   );

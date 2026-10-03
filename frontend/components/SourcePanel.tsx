@@ -26,6 +26,14 @@ export function SourceRefs({ refs, className = "" }: { refs?: string[]; classNam
   const ctx = useContext(SourceContext);
   if (!refs?.length) return null;
   const unique = [...new Set(refs)];
+  if (!ctx) {
+    // Outside a guide page (e.g. the print view) citations are plain text.
+    return (
+      <span className={`text-xs text-slate-500 ${className}`}>
+        (Source: {unique.map(refLabel).join(", ")})
+      </span>
+    );
+  }
   return (
     <span className={`inline-flex flex-wrap items-center gap-1 align-middle ${className}`}>
       {unique.map((r) => (

@@ -8,11 +8,19 @@ export type GuideProgress = {
   stage: string | null;
   topics: { id: string; title: string }[];
   readySections: string[];
+  reviewedSections: string[];
   failed: { code?: string; message?: string } | null;
   completed: boolean;
 };
 
-const EMPTY: GuideProgress = { stage: null, topics: [], readySections: [], failed: null, completed: false };
+const EMPTY: GuideProgress = {
+  stage: null,
+  topics: [],
+  readySections: [],
+  reviewedSections: [],
+  failed: null,
+  completed: false,
+};
 
 /**
  * Follows a guide's progress stream (SSE). Every event is replayed from the start, so a page
@@ -54,6 +62,14 @@ export function useGuideEvents(guideId: string, enabled: boolean, onChange: () =
           : { ...p, readySections: [...p.readySections, data.section_id] },
       );
       onChangeRef.current();
+    });
+    source.addEventListener("section_reviewed", (e) => {
+      const data = parse(e);
+      setProgress((p) =>
+        p.reviewedSections.includes(data.section_id)
+          ? p
+          : { ...p, reviewedSections: [...p.reviewedSections, data.section_id] },
+      );
     });
     source.addEventListener("completed", () => {
       // A completed event from an earlier run can be replayed; the guide status decides what is shown.

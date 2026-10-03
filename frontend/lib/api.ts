@@ -1,4 +1,5 @@
 import type {
+  ExportFormat,
   FlashcardRating,
   Guide,
   GuideList,
@@ -94,6 +95,7 @@ export const api = {
       instruction,
     }),
   eventsUrl: (guideId: string) => `${BASE}/guides/${guideId}/events`,
+  exportUrl: (guideId: string, format: ExportFormat) => `${BASE}/guides/${guideId}/export?format=${format}`,
 
   answerQuestion: (guideId: string, questionId: string, answer: string) =>
     request<QuizResult>("POST", `/guides/${guideId}/quiz-attempts`, { question_id: questionId, answer }),

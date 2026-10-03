@@ -18,6 +18,7 @@ export const STAGES: { key: string; label: string }[] = [
   { key: "plan", label: "Reading your material and finding the main ideas" },
   { key: "sequence", label: "Putting the ideas in a good learning order" },
   { key: "write_sections", label: "Writing explanations and examples" },
+  { key: "review", label: "Double-checking each section against your material" },
   { key: "assemble", label: "Adding the overview and summary" },
   { key: "practice", label: "Making practice questions and flashcards" },
   { key: "check", label: "Checking facts against your material" },

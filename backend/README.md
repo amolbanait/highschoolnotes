@@ -50,9 +50,10 @@ mislabelled examples) that the code must catch. No test calls the real model.
 | 3 | Plan | `pipeline/stages/plan.py` | One model call: concepts with difficulty and prerequisites, vocabulary, verbatim facts and formulas, relationships, gaps. |
 | 4 | Sequence | `pipeline/stages/sequence.py` | Code: topological sort (prerequisites first, source order breaks ties, cycles broken with a warning); every citation and quote checked. |
 | 5 | Write sections | `pipeline/stages/write.py` | One call per concept, in parallel, with the outline and that concept's segments. Three levels only for hard concepts; Mermaid only where planned. |
-| 6 | Assemble | `pipeline/stages/assemble.py` | Overview, objectives, summary, review checklist. |
-| 7 | Practice | `pipeline/stages/practice.py` | Six question types with answer key, flashcards. A multiple-choice answer that is not exactly one option becomes an open question. |
-| 8 | Check | `pipeline/orchestrator.py` | Deterministic checks only for now; the model review and regenerate-or-flag loop is the next build step. |
+| 6 | Review | `pipeline/stages/review.py`, `quality/checks.py` | Code checks (citations, numbers not in the source, reading level), then a separate, cheaper model (`HSN_REVIEWER_MODEL`, default `claude-sonnet-5-5`) scores each section for accuracy, grounding, examples, clarity and the diagram. Below `HSN_QUALITY_THRESHOLD` (70) the section is rewritten once with the problems attached and reviewed again; the better version is kept, and if it is still below, it is flagged "Check this against your source". A major inaccurate or unsupported claim caps the score at 60. |
+| 7 | Assemble | `pipeline/stages/assemble.py` | Overview, objectives, summary, review checklist. |
+| 8 | Practice | `pipeline/stages/practice.py` | Six question types with answer key, flashcards. A multiple-choice answer that is not exactly one option becomes an open question. |
+| 9 | Check | `pipeline/orchestrator.py` | Guide-level: missing sections, unverified quotes, flagged sections, and coverage (how much of the source nothing cites). Writes one `quality_reports` row per section and the guide's `quality_score` (mean of section scores). |
 
 Each stage's output is saved to the job's `state`, so a crashed or rate-limited job resumes
 where it stopped, and finished sections are never paid for twice. Progress events go to the
@@ -86,7 +87,8 @@ Auth is an HTTP-only session cookie. Requests that change data must also send an
 | `GET /guides?cursor=`, `GET /guides/{id}`, `DELETE /guides/{id}` | `content` is the guide document, partial while running. |
 | `GET /guides/{id}/refs/{ref}` | Resolve a citation to its segment text and location (the "view in source" panel). |
 | `GET /guides/{id}/events` | SSE: `stage`, `topics_detected`, `section_ready`, `completed`, `failed`. Supports `Last-Event-ID`. |
-| `POST /guides/{id}/sections/{section_id}/regenerate` | `{instruction?: "simpler"}`. 202 `{job_id}`. |
+| `POST /guides/{id}/sections/{section_id}/regenerate` | `{instruction?: "simpler"}`. 202 `{job_id}`. The rewrite is reviewed like any other section. |
+| `GET /guides/{id}/export?format=pdf\|docx\|md\|html` | Download a finished guide (409 while it is being made). Same order and labels as the web view, plus practice questions with a separate answer key and flashcards. |
 | `POST /guides/{id}/quiz-attempts`, `POST /guides/{id}/flashcard-reviews` | Multiple choice is graded; open answers return the model answer for self-checking. |
 
 Limits: 20 MB per upload, 60 pages or 40,000 words per guide, one running guide per user,
@@ -104,5 +106,12 @@ Limits: 20 MB per upload, 60 pages or 40,000 words per guide, one running guide 
   Word and text files have no reliable pages.
 - **Pasted text** is read as Markdown, so pasted headings become sections.
 - **Long inputs** are planned in one call (40,000 words fits comfortably), not summary-then-plan.
-- **Not yet here** (next steps in the plan): the model quality review and `quality_reports` writes, Mermaid
-  parsing, export, and the web app.
+- **Diagrams in exports:** `diagrams/mermaid.py` parses the Mermaid subset the guides use (flowchart,
+  timeline, mindmap) and rejects anything else, including click handlers and `%%{init}%%` directives.
+  `diagrams/svg.py` draws them as static SVG for PDF, HTML and Word (Word gets a PNG of the same drawing);
+  Markdown keeps the Mermaid source plus a text version.
+- **Formulas in exports** are readable text (`6CO₂ + 6H₂O → C₆H₁₂O₆`), since nothing server-side runs KaTeX;
+  Markdown keeps the LaTeX.
+- **PDF export** needs Pango and a font (`libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core`
+  on Debian/Ubuntu; the Dockerfile installs them). WeasyPrint gets a URL fetcher that refuses every URL, and
+  model text is rendered with raw HTML, images and links turned off.

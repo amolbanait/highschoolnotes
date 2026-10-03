@@ -392,6 +392,31 @@
           "title": "Flags",
           "type": "array"
         },
+        "needs_checking": {
+          "default": false,
+          "description": "Still below the threshold after a rewrite: check it against the source",
+          "title": "Needs Checking",
+          "type": "boolean"
+        },
+        "problems": {
+          "description": "What the reviewer could not confirm, shown to the student",
+          "items": {
+            "type": "string"
+          },
+          "title": "Problems",
+          "type": "array"
+        },
+        "reviewed": {
+          "default": false,
+          "title": "Reviewed",
+          "type": "boolean"
+        },
+        "rewritten": {
+          "default": false,
+          "description": "Rewritten once because the first review was low",
+          "title": "Rewritten",
+          "type": "boolean"
+        },
         "score": {
           "anyOf": [
             {
@@ -402,6 +427,7 @@
             }
           ],
           "default": null,
+          "description": "0 to 100 from the review; None if not reviewed",
           "title": "Score"
         }
       },

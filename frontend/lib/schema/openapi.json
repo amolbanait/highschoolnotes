@@ -1176,6 +1176,81 @@
         ]
       }
     },
+    "/api/v1/guides/{guide_id}/export": {
+      "get": {
+        "description": "Download the finished guide as PDF, Word, Markdown or a standalone HTML page.",
+        "operationId": "export_guide_api_v1_guides__guide_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "guide_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Guide Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "pdf",
+              "enum": [
+                "pdf",
+                "docx",
+                "md",
+                "html"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "hsn_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hsn Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {},
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {},
+              "text/html; charset=utf-8": {},
+              "text/markdown; charset=utf-8": {}
+            },
+            "description": "The file"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Guide",
+        "tags": [
+          "guides"
+        ]
+      }
+    },
     "/api/v1/guides/{guide_id}/flashcard-reviews": {
       "post": {
         "operationId": "flashcard_review_api_v1_guides__guide_id__flashcard_reviews_post",
